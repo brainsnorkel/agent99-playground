@@ -179,8 +179,8 @@ function createVM() {
 // Use in pipeline
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') })  // Extract text from Response
   .as('html')
   .extractImagesFromHTML({ 
     html: A99.args('html'), 
@@ -246,15 +246,20 @@ const processCandidateImagesAtom = defineAtom(
 ```typescript
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')                    // Alias current result
-  .varGet({ key: 'response.text' })  // Access nested property
+  .as('httpResult')                              // Alias current result
+  .extractResponseText({ response: A99.args('httpResult') }) // Extract text from Response
   .as('html')
-  .htmlExtractText({ html: A99.args('html') })
+  .varSet({ key: 'html', value: 'html' })        // Store for later use
+  .varGet({ key: 'html' })
+  .as('htmlValue')
+  .htmlExtractText({ html: A99.args('htmlValue') })
   .as('pageText')
   .varSet({ key: 'pageText', value: 'pageText' }) // Store for later
   .buildUserPrompt({ url: A99.args('url') })      // Uses stored pageText
   .as('userPrompt')
 ```
+
+**Note**: `httpFetch` returns a Response object, so use `extractResponseText` atom to get the text content. Don't use `.varGet({ key: 'response.text' })` as this gets the method reference, not the actual text.
 
 **Benefits**:
 - Type-safe variable access

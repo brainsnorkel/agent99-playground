@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Removed dead code**: Removed unused standalone `scoreImageInterestingness()` function (lines 294-375) - the atom version is used instead
 - **Removed duplicate code**: Removed standalone `predictWithVision()` function that duplicated `createCustomCapabilities().llm.predictWithVision`
 - **DRY principle**: `testVisionAtom()` now uses `createCustomCapabilities()` instead of duplicating vision capability code
+- **Documentation updated**: Fixed all code examples in README.md, AGENT99_PATTERNS.md, and QUICK_REFERENCE.md to use `extractResponseText` instead of broken `.varGet({ key: 'response.text' })` pattern
 
 ### Fixed (Previous)
 - **httpFetch Response Handling**: Fixed issue where `httpFetch` returns a Response object (not text) when using custom fetch capability. Added `extractResponseText` atom to convert Response.text() to string once (body can only be read once)
