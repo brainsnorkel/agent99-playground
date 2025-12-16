@@ -288,93 +288,6 @@ export async function fetchImageData(imageUrl: string): Promise<{ size: number; 
 }
 
 /**
- * Scores an image for "interestingness" using LLM vision analysis
- * Returns a score from 0-100 indicating how interesting/informative the image is
- */
-async function scoreImageInterestingness(
-  imageDataUri: string,
-  imageInfo: ImageInfo,
-  pageContext: { altText: string; topic: string } | undefined,
-  llmBaseUrl: string
-): Promise<number> {
-  const systemPrompt = `You are an image analysis expert. Your task is to score images on a scale of 0-100 for how "interesting" or informative they are.
-
-Consider these factors:
-- Visual complexity and content richness (charts, diagrams, photos with detail > simple icons)
-- Informative value (does it convey meaningful information vs being purely decorative?)
-- Relevance to typical webpage content (main content images > decorative elements)
-- Presence of text, data visualizations, or complex scenes
-- Overall visual appeal and engagement
-
-Score guidelines:
-- 0-20: Simple icons, logos, decorative elements, tracking pixels
-- 21-40: Simple graphics, basic illustrations
-- 41-60: Standard photos, moderate complexity
-- 61-80: Rich content images, charts, diagrams, detailed photos
-- 81-100: Highly informative images, complex data visualizations, key content images
-
-Return your response as JSON with a single "score" field (0-100).`
-
-  let userPrompt = `Score this image for interestingness:
-
-Image URL: ${imageInfo.url}
-${imageInfo.alt ? `Alt text: ${imageInfo.alt}` : 'No alt text available'}
-${imageInfo.width && imageInfo.height ? `Dimensions: ${imageInfo.width}x${imageInfo.height}` : ''}`
-
-  if (pageContext) {
-    userPrompt += `
-
-Page Context:
-- Page Topic: ${pageContext.topic}
-- Page Description: ${pageContext.altText}
-
-Consider how relevant and informative this image is in the context of this page.`
-  }
-
-  userPrompt += `
-
-Return JSON with "score" field (0-100).`
-
-  const responseFormat = {
-    type: 'json_schema',
-    json_schema: {
-      name: 'interestingness_score',
-      schema: {
-        type: 'object',
-        properties: {
-          score: {
-            type: 'number',
-            description: 'Interestingness score from 0-100',
-            minimum: 0,
-            maximum: 100,
-          },
-        },
-        required: ['score'],
-      },
-    },
-  }
-
-  try {
-    const llmResponse = await predictWithVision(
-      llmBaseUrl,
-      systemPrompt,
-      userPrompt,
-      imageDataUri,
-      responseFormat
-    )
-
-    const parsed = JSON.parse(llmResponse.content)
-    return parsed.score || 0
-  } catch (error) {
-    console.warn(`Failed to score image ${imageInfo.url}:`, error)
-    // Fallback: use size/area as a proxy for interestingness
-    if (imageInfo.area) return Math.min(50, imageInfo.area / 10000) // Cap at 50 for fallback
-    if (imageInfo.size) return Math.min(50, imageInfo.size / 100000) // Cap at 50 for fallback
-    return 0
-  }
-}
-
-/**
  * Filters images to those larger than icon size and limits to top candidates
  * Icon size threshold: area > 10000 (roughly 100x100) or width > 100 and height > 100
  */
@@ -1094,179 +1007,6 @@ Please analyze the image and provide a JSON response with:
   }
   
   return finalResult
-}
-
-/**
- * Makes a vision-capable LLM API call with image support
- * Supports OpenAI-compatible vision API format
- */
-async function predictWithVision(
-  llmBaseUrl: string,
-  system: string,
-  userText: string,
-  imageDataUri: string,
-  responseFormat?: any
-): Promise<{ content: string }> {
-  try {
-    // Format messages for vision API (OpenAI-compatible format)
-    const messages = [
-      { role: 'system', content: system },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: userText },
-          {
-            type: 'image_url',
-            image_url: {
-              url: imageDataUri, // data URI with base64 image
-            },
-          },
-        ],
-      },
-    ]
-
-    const response = await fetch(`${llmBaseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages,
-        temperature: 0.7,
-        response_format: responseFormat,
-      }),
-      signal: AbortSignal.timeout(120000), // 120 second timeout for vision
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      let errorMessage: string
-      
-      if (errorText.includes('No models loaded')) {
-        errorMessage = `LLM Vision Error: No model loaded in LM Studio.\n\n` +
-          `To fix this:\n` +
-          `1. Open LM Studio\n` +
-          `2. Go to the "Chat" tab\n` +
-          `3. Select and load a model from the dropdown\n` +
-          `4. Ensure the Local Server is running (View → Local Server)\n` +
-          `5. Try again`
-      } else if (response.status === 401) {
-        errorMessage = `LLM Vision Error: Authentication failed (401 Unauthorized).\n\n` +
-          `The LLM server at ${llmBaseUrl} requires authentication.\n` +
-          `Please check your API key or authentication settings.`
-      } else if (response.status === 404) {
-        errorMessage = `LLM Vision Error: Endpoint not found (404).\n\n` +
-          `The LLM server at ${llmBaseUrl} does not have the /chat/completions endpoint.\n` +
-          `Please verify the server URL is correct and the server supports OpenAI-compatible vision API.`
-      } else if (response.status === 429) {
-        errorMessage = `LLM Vision Error: Rate limit exceeded (429).\n\n` +
-          `The LLM server is receiving too many requests.\n` +
-          `Please wait a moment and try again.`
-      } else if (response.status >= 500) {
-        errorMessage = `LLM Vision Error: Server error (${response.status}).\n\n` +
-          `The LLM server at ${llmBaseUrl} encountered an internal error.\n` +
-          `Please check if the server is running properly and try again later.`
-      } else {
-        errorMessage = `LLM Vision Error: ${response.status} ${response.statusText}\n\n` +
-          `Server: ${llmBaseUrl}\n` +
-          `Details: ${errorText.substring(0, 200)}`
-      }
-      
-      throw new Error(errorMessage)
-    }
-
-    const data = await response.json() as any
-    return data.choices[0]?.message ?? { content: '' }
-  } catch (error: any) {
-    // Handle connection errors with helpful messages
-    const errorCode = error.cause?.code || error.code
-    const errorMessage = error.message || String(error)
-    
-    if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
-      throw new Error(
-        `LLM Vision Connection Failed: Cannot connect to LLM server.\n\n` +
-        `Server URL: ${llmBaseUrl}\n\n` +
-        `Possible solutions:\n` +
-        `1. Ensure LM Studio is running and the Local Server is started\n` +
-        `2. Check that the server URL is correct (should be like http://localhost:1234/v1)\n` +
-        `3. Verify the server is accessible from this machine\n` +
-        `4. Check your firewall settings\n\n` +
-        `To start LM Studio server:\n` +
-        `- Open LM Studio\n` +
-        `- Load a model in the Chat tab\n` +
-        `- Go to View → Local Server\n` +
-        `- Click "Start Server"`
-      )
-    } else if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
-      throw new Error(
-        `LLM Vision Connection Failed: Cannot resolve server hostname.\n\n` +
-        `Server URL: ${llmBaseUrl}\n\n` +
-        `The hostname in the URL cannot be resolved.\n` +
-        `Please check:\n` +
-        `1. The server URL is correct\n` +
-        `2. Your network connection is working\n` +
-        `3. DNS resolution is working properly`
-      )
-    } else if (errorCode === 'ETIMEDOUT' || errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT')) {
-      throw new Error(
-        `LLM Vision Connection Failed: Request timed out.\n\n` +
-        `Server URL: ${llmBaseUrl}\n\n` +
-        `The LLM server did not respond within 120 seconds.\n` +
-        `Vision requests can take longer - this might indicate:\n` +
-        `1. The server is overloaded or slow\n` +
-        `2. Network connectivity issues\n` +
-        `3. The server is not running or not accessible\n\n` +
-        `Please check the server status and try again.`
-      )
-    } else if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
-      throw new Error(
-        `LLM Vision Connection Failed: Connection was reset by the server.\n\n` +
-        `Server URL: ${llmBaseUrl}\n\n` +
-        `The connection was unexpectedly closed by the server.\n` +
-        `This might indicate:\n` +
-        `1. The server crashed or restarted\n` +
-        `2. Network instability\n` +
-        `3. The server rejected the connection\n\n` +
-        `Please check the server status and try again.`
-      )
-    } else if (error.name === 'AbortError' || errorMessage.includes('aborted')) {
-      throw new Error(
-        `LLM Vision Connection Failed: Request was aborted (timeout).\n\n` +
-        `Server URL: ${llmBaseUrl}\n\n` +
-        `The request took too long and was cancelled.\n` +
-        `Vision requests can take longer - this might indicate:\n` +
-        `1. The server is very slow or unresponsive\n` +
-        `2. The model is taking too long to process the image\n` +
-        `3. Network issues\n\n` +
-        `Please try again or use a faster model.`
-      )
-    } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
-      throw new Error(
-        `LLM Vision Connection Failed: Network request failed.\n\n` +
-        `Server URL: ${llmBaseUrl}\n\n` +
-        `Unable to make a network request to the LLM server.\n` +
-        `Please check:\n` +
-        `1. The server URL is correct\n` +
-        `2. The server is running and accessible\n` +
-        `3. Your network connection is working\n` +
-        `4. CORS settings (if accessing a remote server)`
-      )
-    }
-    
-    // If it's already a formatted error message, re-throw it
-    if (errorMessage.includes('LLM Vision Error:') || errorMessage.includes('LLM Vision Connection Failed:')) {
-      throw error
-    }
-    
-    // Otherwise, provide a generic but helpful error
-    throw new Error(
-      `LLM Vision Connection Failed: ${errorMessage}\n\n` +
-      `Server URL: ${llmBaseUrl}\n\n` +
-      `Please check:\n` +
-      `1. The server is running and accessible\n` +
-      `2. The URL is correct\n` +
-      `3. Your network connection is working\n` +
-      `4. The server supports the OpenAI-compatible vision API format`
-    )
-  }
 }
 
 /**
@@ -2398,12 +2138,9 @@ export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) 
   const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   
-  // Create capabilities with vision support
-  const customCapabilities = llmBaseUrl 
-    ? createCustomCapabilities(finalLlmUrl)
-    : { ...batteries, llm: { ...batteries.llm, predictWithVision: async (system: string, userText: string, imageDataUri: string, responseFormat?: any) => {
-        return await predictWithVision(finalLlmUrl, system, userText, imageDataUri, responseFormat)
-      } } }
+  // Create capabilities with vision support - always use createCustomCapabilities
+  // since it includes predictWithVision implementation
+  const customCapabilities = createCustomCapabilities(finalLlmUrl)
   
   const result = await vm.run(
     ast,
@@ -2451,12 +2188,20 @@ export async function generateAltText(url: string, llmBaseUrl?: string) {
   // This follows agent-99's "agents-as-data" principle - all logic is in the VM
   const logic = b
     // Fetch the webpage using httpFetch atom (capability-based security)
+    // httpFetch may return a Response object (when using custom fetch) or text directly
     .httpFetch({ url: A99.args('url') })
-    .as('response')
-    .varGet({ key: 'response.text' })
+    .as('httpResult')
+    // Extract text from Response if needed (Response body can only be read once)
+    // Use custom atom to handle both Response objects and strings
+    .extractResponseText({ response: A99.args('httpResult') })
     .as('html')
+    // Store HTML in variable store for later use
+    .varSet({ key: 'html', value: 'html' })
+    // Get html from state for extraction
+    .varGet({ key: 'html' })
+    .as('htmlValue')
     // Extract text from HTML using custom atom
-    .htmlExtractText({ html: A99.args('html') })
+    .htmlExtractText({ html: A99.args('htmlValue') })
     .as('pageText')
     // Store pageText in variable for prompt construction
     .varSet({ key: 'pageText', value: 'pageText' })
