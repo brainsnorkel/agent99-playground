@@ -528,9 +528,10 @@ Analyze this content and generate a concise alt-text summary suitable for access
       // Find the largest image
       let largestImage: ImageInfo | null = null
       let maxArea = 0
+      let maxWidth = 0
       let maxSize = 0
       
-      // First, try to find by area (dimensions)
+      // First, try to find by area (dimensions - width * height)
       for (const img of images) {
         if (img.area && img.area > maxArea) {
           maxArea = img.area
@@ -538,8 +539,23 @@ Analyze this content and generate a concise alt-text summary suitable for access
         }
       }
       
-      // If no dimensions available, fetch images to get their file sizes
+      // If no area available, try to find by width alone (for images with width but no height)
       if (!largestImage || !largestImage.area) {
+        for (const img of images) {
+          if (img.width && img.width > maxWidth) {
+            maxWidth = img.width
+            if (!largestImage) {
+              largestImage = img
+            } else if (img.width > (largestImage.width || 0)) {
+              largestImage = img
+            }
+          }
+        }
+      }
+      
+      // If still no image selected, fetch images to get their file sizes
+      if (!largestImage) {
+        console.log('No image selected by dimensions, trying file size...')
         for (const img of images) {
           try {
             const imageData = await fetchImageData(img.url)
@@ -556,9 +572,20 @@ Analyze this content and generate a concise alt-text summary suitable for access
         }
       }
       
-      if (largestImage) {
-        console.log(`Selected largest image: ${largestImage.url} (${largestImage.width}x${largestImage.height || '?'}, area: ${largestImage.area || 'unknown'}, size: ${largestImage.size || 'unknown'} bytes)`)
-        // Fetch the largest image data
+      // If still no image, just use the first one
+      if (!largestImage && images.length > 0) {
+        console.log('No image selected by size, using first image')
+        largestImage = images[0]
+      }
+      
+      if (!largestImage) {
+        throw new Error('Could not determine largest image from the extracted images')
+      }
+      
+      console.log(`Selected largest image: ${largestImage.url} (${largestImage.width || '?'}x${largestImage.height || '?'}, area: ${largestImage.area || 'unknown'}, size: ${largestImage.size || 'unknown'} bytes)`)
+      
+      // Fetch the largest image data
+      try {
         const imageData = await fetchImageData(largestImage.url)
         
         // Generate image alt-text using page context
@@ -638,9 +665,13 @@ Please analyze the image and provide a JSON response with:
           imageHeight: largestImage.height,
           imageSize: imageData.size,
         }
+      } catch (fetchError: any) {
+        console.error(`Failed to fetch image data for ${largestImage.url}:`, fetchError.message)
+        throw fetchError
       }
     } catch (error: any) {
-      console.warn('Image processing failed:', error.message)
+      console.error('Image processing failed:', error.message)
+      console.error('Error stack:', error.stack)
       imageResult = null
     }
   } else {
