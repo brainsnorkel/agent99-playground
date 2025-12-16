@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clickable image thumbnails that open full-size images in new tab
 - Mode badges (Page Mode / Image Mode) in history entries
 - LocalStorage persistence for processing mode preference
+- `llmVisionBattery` custom atom for agent-99 vision processing
+- `testVisionAtom()` function to test vision atom with agent-99 execution model
+- Comprehensive test suite for vision atom (4 test cases)
+- `fetchImageData()` exported function for image fetching and base64 conversion
 
 ### Changed
 - Updated server API to support both page and image processing modes

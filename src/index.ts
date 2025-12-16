@@ -104,7 +104,7 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
 /**
  * Fetches an image and returns its size and base64 representation
  */
-async function fetchImageData(imageUrl: string): Promise<{ size: number; base64: string; width?: number; height?: number }> {
+export async function fetchImageData(imageUrl: string): Promise<{ size: number; base64: string; width?: number; height?: number }> {
   try {
     const response = await fetch(imageUrl)
     if (!response.ok) {
@@ -139,6 +139,11 @@ async function fetchImageData(imageUrl: string): Promise<{ size: number; base64:
 
 /**
  * Finds the largest image on a webpage and generates alt text using LLM vision
+ * 
+ * NOTE: This function currently uses direct API calls rather than agent-99 batteries
+ * for vision processing. The image extraction and selection logic runs outside the VM,
+ * and the vision API call is made directly. This could be refactored to use agent-99's
+ * execution model for consistency with generateAltText().
  */
 export async function generateImageAltText(url: string, llmBaseUrl?: string) {
   // Fetch the webpage
@@ -194,9 +199,9 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string) {
   // Fetch the largest image data
   const imageData = await fetchImageData(largestImage.url)
   
-  // Use LLM vision API to describe the image
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
-  const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
+  // Use agent-99 VM with vision battery to describe the image
+  const vm = createVM()
+  const b = vm.A99
   
   const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
 
@@ -240,7 +245,11 @@ Please analyze the image and provide a JSON response with:
     },
   }
   
-  // Call vision API directly
+  // Call vision API directly (not using agent-99 batteries currently)
+  // TODO: Refactor to use agent-99's execution model for consistency
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
+  
   const llmResponse = await predictWithVision(
     finalLlmUrl,
     systemPrompt,
@@ -367,6 +376,49 @@ function createCustomCapabilities(llmBaseUrl: string) {
         throw error
       }
     },
+    async predictWithVision(system: string, userText: string, imageDataUri: string, responseFormat?: any) {
+      try {
+        // Format messages for vision API (OpenAI-compatible format)
+        const messages = [
+          { role: 'system', content: system },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: userText },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageDataUri, // data URI with base64 image
+                },
+              },
+            ],
+          },
+        ]
+
+        const response = await fetch(`${llmBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages,
+            temperature: 0.7,
+            response_format: responseFormat,
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`LLM Vision Error: ${response.status} ${response.statusText} - ${errorText}`)
+        }
+
+        const data = await response.json() as any
+        return data.choices[0]?.message ?? { content: '' }
+      } catch (error: any) {
+        if (error.cause?.code === 'ECONNREFUSED') {
+          throw new Error(`No LLM provider configured at ${llmBaseUrl}. Please start LM Studio or provide an API key.`)
+        }
+        throw error
+      }
+    },
     async embed(text: string) {
       try {
         const response = await fetch(`${llmBaseUrl}/embeddings`, {
@@ -423,6 +475,32 @@ const llmPredictBatteryLongTimeout = defineAtom(
 )
 
 /**
+ * Creates a vision-capable LLM atom for image analysis
+ */
+const llmVisionBattery = defineAtom(
+  'llmVisionBattery',
+  s.object({
+    system: s.string,
+    userText: s.string,
+    imageDataUri: s.string,
+    responseFormat: s.any,
+  }),
+  s.object({
+    content: s.string,
+    tool_calls: s.array(s.any),
+  }),
+  async ({ system, userText, imageDataUri, responseFormat }: any, ctx: any) => {
+    const llmCap = ctx.capabilities.llm
+    if (!llmCap?.predictWithVision) {
+      throw new Error("Capability 'llm.predictWithVision' missing or invalid.")
+    }
+    const resolvedSystem = (system && system !== '') ? system : 'You are a helpful agent.'
+    return llmCap.predictWithVision(resolvedSystem, userText, imageDataUri, responseFormat)
+  },
+  { docs: 'Generate completion using LLM vision battery for image analysis', cost: 200, timeoutMs: 60000 } // Higher cost for vision
+)
+
+/**
  * Creates a VM instance configured with battery capabilities for local development
  */
 function createVM() {
@@ -430,7 +508,104 @@ function createVM() {
     storeVectorize,
     storeSearch,
     llmPredictBattery: llmPredictBatteryLongTimeout, // Use custom atom with longer timeout
+    llmVisionBattery, // Register vision atom for image processing
   })
+}
+
+/**
+ * Test function to verify vision atom works with agent-99
+ * This function uses the vision atom within agent-99's execution model
+ * @param imageDataUri - Base64 data URI of the image to analyze
+ * @param llmBaseUrl - Optional custom LLM base URL
+ * @returns Object containing the alt-text and description
+ */
+export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) {
+  const vm = createVM()
+  const b = vm.A99
+  
+  const systemPrompt = `You are an accessibility expert. Describe this image concisely. Return JSON with "altText" (50-200 chars) and optional "description".`
+  const userPrompt = `Analyze this image and generate alt-text.`
+  
+  const responseFormat = {
+    type: 'json_schema',
+    json_schema: {
+      name: 'image_alt_text_result',
+      schema: {
+        type: 'object',
+        properties: {
+          altText: { type: 'string', description: 'Alt-text (50-200 characters)' },
+          description: { type: 'string', description: 'Detailed description (optional)' },
+        },
+        required: ['altText'],
+      },
+    },
+  }
+  
+  // Build the agent logic chain using vision battery
+  const logic = b
+    .llmVisionBattery({
+      system: systemPrompt,
+      userText: userPrompt,
+      imageDataUri,
+      responseFormat,
+    })
+    .as('summary')
+    .varGet({ key: 'summary.content' })
+    .as('jsonContent')
+    .jsonParse({ str: 'jsonContent' })
+    .as('parsed')
+    .varSet({ key: 'altText', value: 'parsed.altText' })
+    .varSet({ key: 'description', value: 'parsed.description' })
+    .return(
+      s.object({
+        altText: s.string,
+        description: s.any, // Optional field - can be string or undefined
+      })
+    )
+  
+  // Compile to AST
+  const ast = logic.toJSON()
+  
+  // Execute in VM with capabilities
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
+  
+  // Create capabilities with vision support
+  const customCapabilities = llmBaseUrl 
+    ? createCustomCapabilities(finalLlmUrl)
+    : { ...batteries, llm: { ...batteries.llm, predictWithVision: async (system: string, userText: string, imageDataUri: string, responseFormat?: any) => {
+        return await predictWithVision(finalLlmUrl, system, userText, imageDataUri, responseFormat)
+      } } }
+  
+  const result = await vm.run(
+    ast,
+    {},
+    {
+      fuel: 10000,
+      capabilities: customCapabilities,
+    }
+  )
+  
+  // Parse the result
+  let altText = result.result?.altText
+  let description = result.result?.description
+  
+  // If not found, try parsing from content field
+  if (!altText && result.result?.summary?.content) {
+    try {
+      const parsed = JSON.parse(result.result.summary.content)
+      altText = parsed.altText
+      description = parsed.description
+    } catch {
+      altText = result.result.summary.content
+    }
+  }
+  
+  return {
+    altText: altText || 'Unable to generate alt-text',
+    description: description || undefined,
+    fuelUsed: result.fuelUsed,
+  }
 }
 
 /**

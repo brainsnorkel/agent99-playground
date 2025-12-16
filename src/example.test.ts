@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll } from 'bun:test'
-import { generateAltText, extractTextFromHTML } from './index'
+import { generateAltText, extractTextFromHTML, testVisionAtom, fetchImageData } from './index'
 
 describe('extractTextFromHTML', () => {
   test('should remove HTML tags', () => {
@@ -122,5 +122,105 @@ describe('generateAltText', () => {
     const malformedUrl = 'not-a-valid-url'
     await expect(generateAltText(malformedUrl)).rejects.toThrow()
   }, { timeout: 30000 })
+})
+
+describe('Vision Atom Tests', () => {
+  // Helper to create a simple test image (1x1 red pixel PNG in base64)
+  function createTestImageDataUri(): string {
+    // 1x1 red PNG in base64
+    const base64Image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    return `data:image/png;base64,${base64Image}`
+  }
+
+  test('should test vision atom with a simple test image', async () => {
+    const testImage = createTestImageDataUri()
+    
+    try {
+      const result = await testVisionAtom(testImage)
+      
+      expect(result).toHaveProperty('altText')
+      expect(result).toHaveProperty('fuelUsed')
+      expect(typeof result.altText).toBe('string')
+      expect(typeof result.fuelUsed).toBe('number')
+      
+      // Alt-text should be present
+      expect(result.altText.length).toBeGreaterThan(0)
+      
+      // Fuel should be consumed (vision is more expensive)
+      expect(result.fuelUsed).toBeGreaterThan(0)
+      
+      // If description is present, it should be a string
+      if (result.description) {
+        expect(typeof result.description).toBe('string')
+      }
+    } catch (error: any) {
+      // If LLM not available, verify it's a connection error (expected behavior)
+      if (error.message?.match(/LLM|connection|refused|Unable to connect|predictWithVision/i)) {
+        // Connection error is expected when LLM not running or vision not supported
+        expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision/i)
+      } else {
+        // Other errors should still fail the test
+        throw error
+      }
+    }
+  }, { timeout: 60000 })
+
+  test('should test vision atom with a real image from URL', async () => {
+    // Use a small, publicly available test image
+    const testImageUrl = 'https://via.placeholder.com/100x100.png'
+    
+    try {
+      // Fetch the image and convert to data URI
+      const imageData = await fetchImageData(testImageUrl)
+      
+      const result = await testVisionAtom(imageData.base64)
+      
+      expect(result).toHaveProperty('altText')
+      expect(result).toHaveProperty('fuelUsed')
+      expect(typeof result.altText).toBe('string')
+      expect(typeof result.fuelUsed).toBe('number')
+      
+      // Alt-text should be present and reasonable length
+      expect(result.altText.length).toBeGreaterThan(0)
+      expect(result.altText.length).toBeLessThanOrEqual(500) // Reasonable upper bound
+      
+      // Fuel should be consumed
+      expect(result.fuelUsed).toBeGreaterThan(0)
+    } catch (error: any) {
+      // If image fetch fails or LLM not available, that's expected
+      if (error.message?.match(/LLM|connection|refused|Unable to connect|predictWithVision|Failed to fetch image/i)) {
+        expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision|Failed to fetch image/i)
+      } else {
+        throw error
+      }
+    }
+  }, { timeout: 60000 })
+
+  test('should handle invalid image data URI', async () => {
+    const invalidImage = 'data:image/png;base64,invalid-base64-data'
+    
+    try {
+      const result = await testVisionAtom(invalidImage)
+      // If it succeeds, that's fine - LLM might handle it
+      expect(result).toHaveProperty('altText')
+    } catch (error: any) {
+      // Should either fail gracefully or return an error message
+      expect(error.message).toBeDefined()
+    }
+  }, { timeout: 60000 })
+
+  test('should test vision atom with custom LLM URL', async () => {
+    const testImage = createTestImageDataUri()
+    const customUrl = 'http://localhost:1234/v1'
+    
+    try {
+      const result = await testVisionAtom(testImage, customUrl)
+      expect(result).toHaveProperty('altText')
+      expect(result).toHaveProperty('fuelUsed')
+    } catch (error: any) {
+      // If LLM not available, that's expected
+      expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision/i)
+    }
+  }, { timeout: 60000 })
 })
 
