@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI support for image mode: `bun run src/index.ts --image <url>`
 - Image size comparison (by dimensions or file size) to identify largest image
 - Base64 image encoding for LLM vision API compatibility
+- Web UI support for image mode with mode selector dropdown
+- Image thumbnail display in query history entries
+- Image metadata display (dimensions, file size, description) in history
+- Clickable image thumbnails that open full-size images in new tab
+- Mode badges (Page Mode / Image Mode) in history entries
+- LocalStorage persistence for processing mode preference
+
+### Changed
+- Updated server API to support both page and image processing modes
+- Enhanced `QueryResult` interface to include image-specific fields
+- Updated frontend to display image thumbnails and metadata in history
 
 ### Technical Details
 - Extracts all images from HTML using regex parsing
@@ -21,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prioritizes images by area (width × height), falls back to file size
 - Uses OpenAI-compatible vision API format for image description
 - Supports both dimension-based and file-size-based image selection
+- Server handles mode parameter to route to appropriate processing function
+- Frontend displays thumbnails with hover effects and error handling
 
 ## [1.2.0] - 2025-01-XX
 
