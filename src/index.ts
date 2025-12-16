@@ -532,23 +532,23 @@ Analyze this content and generate a concise alt-text summary suitable for access
       let maxSize = 0
       
       // First, try to find by area (dimensions - width * height)
+      console.log('Selecting largest image by area...')
       for (const img of images) {
         if (img.area && img.area > maxArea) {
           maxArea = img.area
           largestImage = img
+          console.log(`  Found image with area ${img.area}: ${img.url}`)
         }
       }
       
       // If no area available, try to find by width alone (for images with width but no height)
-      if (!largestImage || !largestImage.area) {
+      if (!largestImage) {
+        console.log('No image with area found, trying by width...')
         for (const img of images) {
           if (img.width && img.width > maxWidth) {
             maxWidth = img.width
-            if (!largestImage) {
-              largestImage = img
-            } else if (img.width > (largestImage.width || 0)) {
-              largestImage = img
-            }
+            largestImage = img
+            console.log(`  Selected image by width ${img.width}: ${img.url}`)
           }
         }
       }
