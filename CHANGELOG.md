@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Feature: Image Alt-Text Generation
+
+### Added
+- `generateImageAltText()` function to find the largest image on a webpage and generate alt-text using LLM vision
+- Image extraction from HTML with dimension and size detection
+- Vision-capable LLM API support via `predictWithVision()` function
+- CLI support for image mode: `bun run src/index.ts --image <url>`
+- Image size comparison (by dimensions or file size) to identify largest image
+- Base64 image encoding for LLM vision API compatibility
+
+### Technical Details
+- Extracts all images from HTML using regex parsing
+- Resolves relative image URLs to absolute URLs
+- Prioritizes images by area (width × height), falls back to file size
+- Uses OpenAI-compatible vision API format for image description
+- Supports both dimension-based and file-size-based image selection
+
 ## [1.2.0] - 2025-01-XX
 
 ### Added
