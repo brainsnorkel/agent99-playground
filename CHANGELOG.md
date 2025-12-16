@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Fixed (2025-12-16)
+- **httpFetch Response Handling**: Fixed issue where `httpFetch` returns a Response object (not text) when using custom fetch capability. Added `extractResponseText` atom to convert Response.text() to string once (body can only be read once)
+- **Argument Reference Resolution**: Fixed atoms not resolving `A99.args()` references correctly. Atoms now resolve from `ctx.args`, `ctx.state`, and `ctx.vars` in order
+- **LLM Receiving [object Object]**: Fixed `llmPredictBattery` atom receiving `[object Object]` instead of actual prompt text by resolving argument references before processing
+- **Image Pipeline Data Flow**: Fixed image processing pipeline returning wrong data structure. Added `.varSet({ key: 'candidates', value: 'scoredCandidates' })` before `.return()` to pass processed candidates
+- **processCandidateImagesAtom**: Fixed using `candidates.map()` instead of `actualCandidates.map()` after resolving argument references
+
 ### Changed
 - **Full VM Execution**: All functions now execute entirely within agent-99's VM
 - **Atom-Based Architecture**: Created custom atoms for all domain operations:
+  - `extractResponseText`: Extracts text from HTTP Response objects (handles both Response.text() and direct strings)
   - `extractImagesFromHTMLAtom`: Extracts image information from HTML
   - `filterCandidateImagesAtom`: Filters images larger than icon size
   - `processCandidateImagesAtom`: Fetches and scores images in parallel
@@ -29,7 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Selects highest-scoring image
 
 ### Added
-- **Custom Atoms**: 8 custom atoms for domain-specific operations
+- **`extractResponseText` Atom**: New atom to handle Response objects from httpFetch
+- **Argument Resolution Helper**: Custom atoms now properly resolve `A99.args()` references by checking `ctx.args` first, then `ctx.state`, then `ctx.vars`
+- **Debug Logging**: Added logging throughout pipeline to trace data flow
+- **Custom Atoms**: 9 custom atoms for domain-specific operations (including new extractResponseText)
 - **Parallel Processing**: `processCandidateImagesAtom` handles parallel fetching and scoring
 - **Comprehensive Documentation**: 
   - Updated README.md with idiomatic patterns and examples
@@ -43,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full type safety with input/output schemas
 - Parallel operations encapsulated in atoms
 - Error handling with fallbacks within atoms
+- Response body is read once via extractResponseText and stored for reuse
 
 ### Benefits
 - ✅ **100% Compliance**: All functions now fully comply with agent-99 principles
@@ -56,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All 16 tests passing
 - Updated test error message matching for timeout scenarios
 - Tests validate both page and image alt-text generation
+- Verified with real URLs (abc.net.au/news) - returns actual content, not hallucinated summaries
 
 ## [Previous] - Feature: Combined Page and Image Alt-Text Generation
 

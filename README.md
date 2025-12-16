@@ -95,9 +95,11 @@ const b = vm.A99
 
 const logic = b
   // Step 1: Fetch webpage using httpFetch atom (capability-based security)
+  // Note: httpFetch returns a Response object when using custom fetch capability
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  // Step 1.5: Extract text from Response (body can only be read once)
+  .extractResponseText({ response: A99.args('httpResult') })
   .as('html')
   
   // Step 2: Extract text using custom atom
@@ -335,6 +337,7 @@ async ({ url }, ctx) => {
 
 This project defines several custom atoms:
 
+- **`extractResponseText`**: Extracts text from HTTP Response objects (handles both Response.text() and direct strings)
 - **`htmlExtractText`**: Extracts text content from HTML
 - **`extractImagesFromHTML`**: Extracts image information from HTML
 - **`filterCandidateImages`**: Filters images larger than icon size
@@ -344,17 +347,35 @@ This project defines several custom atoms:
 - **`llmPredictBatteryLongTimeout`**: LLM calls with extended timeout
 - **`llmVisionBattery`**: Vision-capable LLM calls
 
+### Important: Argument Reference Resolution
+
+Custom atoms receive `A99.args()` as argument reference objects (`{ $kind: 'arg', path: 'name' }`), not actual values. Atoms must resolve these from context:
+
+```typescript
+async ({ myParam }, ctx) => {
+  // Resolve argument reference
+  let actualValue = myParam
+  if (myParam && typeof myParam === 'object' && '$kind' in myParam && myParam.$kind === 'arg') {
+    actualValue = ctx.args?.[myParam.path] || ctx.state?.[myParam.path] || ctx.vars?.[myParam.path]
+  }
+  // Use actualValue instead of myParam
+}
+```
+
 ### Pipeline Examples
 
 #### Example 1: Page Alt-Text Generation
 
 ```typescript
 const logic = b
-  .httpFetch({ url: A99.args('url') })        // Fetch webpage
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .httpFetch({ url: A99.args('url') })        // Fetch webpage (returns Response object)
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') }) // Extract text once
   .as('html')
-  .htmlExtractText({ html: A99.args('html') }) // Extract text
+  .varSet({ key: 'html', value: 'html' })     // Store for later use
+  .varGet({ key: 'html' })
+  .as('htmlValue')
+  .htmlExtractText({ html: A99.args('htmlValue') }) // Extract text
   .as('pageText')
   .varSet({ key: 'pageText', value: 'pageText' })
   .buildUserPrompt({ url: A99.args('url') })   // Build prompt
@@ -382,9 +403,12 @@ const logic = b
 ```typescript
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') })
   .as('html')
+  .varSet({ key: 'html', value: 'html' })
+  .varGet({ key: 'html' })
+  .as('htmlValue')
   .extractImagesFromHTML({                     // Extract images
     html: A99.args('html'),
     baseUrl: A99.args('url')

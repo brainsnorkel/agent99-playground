@@ -72,9 +72,22 @@ function resolveUrl(url: string, baseUrl: string): string {
 function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
   const images: ImageInfo[] = []
   
-  // Extract <img> tags
+  // Ensure html is a string
+  if (!html || typeof html !== 'string') {
+    console.warn('extractImagesFromHTML: html is not a string, got:', typeof html, html)
+    return []
+  }
+  
+  // Extract <img> tags (including self-closing and with attributes)
   const imgRegex = /<img[^>]+>/gi
-  const matches = html.matchAll(imgRegex)
+  const matches = Array.from(html.matchAll(imgRegex))
+  
+  // Debug: log how many img tags found
+  if (matches.length === 0) {
+    console.warn('extractImagesFromHTML: No <img> tags found in HTML')
+  } else {
+    console.log(`extractImagesFromHTML: Found ${matches.length} <img> tags`)
+  }
 
   for (const match of matches) {
     const imgTag = match[0]
@@ -89,16 +102,29 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
       src = srcMatch ? srcMatch[1] : null
     }
     
+    // Decode HTML entities in src URL (e.g., &amp; -> &)
+    if (src) {
+      src = src.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    }
+    
     // Skip data URIs that are too small (likely icons/sprites)
     if (src && src.startsWith('data:')) {
       // Only include data URIs if they seem substantial (more than just a small icon)
       if (src.length < 1000) continue // Skip small data URIs (likely icons)
     }
     
-    if (!src) continue
+    if (!src) {
+      // Debug: log when src is missing
+      console.debug('extractImagesFromHTML: Skipping img tag with no src:', imgTag.substring(0, 100))
+      continue
+    }
     
     // Skip very small images (likely icons, sprites, or tracking pixels)
-    if (src.includes('icon') || src.includes('sprite') || src.includes('pixel') || src.includes('tracking')) {
+    // But be less aggressive - only skip if it's clearly a small icon/sprite
+    const srcLower = src.toLowerCase()
+    if (srcLower.includes('/icon/') || srcLower.includes('/sprite/') || 
+        srcLower.includes('pixel.gif') || srcLower.includes('tracking.gif') ||
+        srcLower.includes('1x1') || srcLower.includes('spacer.gif')) {
       continue
     }
     
@@ -109,17 +135,29 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
     const heightMatch = imgTag.match(/height\s*=\s*["']?(\d+)/i)
     const altMatch = imgTag.match(/alt=["']([^"']*)["']/i)
     
-    // Also check for srcset to get larger image sizes
-    const srcsetMatch = imgTag.match(/srcset=["']([^"']+)["']/i)
+    // Also check for srcset (case-insensitive, handles both srcset and srcSet)
+    const srcsetMatch = imgTag.match(/srcset=["']([^"']+)["']/i) || imgTag.match(/srcSet=["']([^"']+)["']/i)
     let largestSrcsetUrl = absoluteUrl
     if (srcsetMatch) {
       // Parse srcset: "url1 1x, url2 2x, url3 800w" format
-      const srcsetEntries = srcsetMatch[1].split(',').map(s => s.trim())
+      // Decode HTML entities in srcset
+      const srcsetValue = srcsetMatch[1].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+      const srcsetEntries = srcsetValue.split(',').map(s => s.trim())
       let largestSize = 0
       for (const entry of srcsetEntries) {
         const parts = entry.split(/\s+/)
         const url = parts[0]
-        const size = parts[1] ? parseInt(parts[1]) : 0
+        // Handle both "800w" and "2x" formats
+        const sizeStr = parts[1] || ''
+        let size = 0
+        if (sizeStr.endsWith('w')) {
+          size = parseInt(sizeStr) || 0
+        } else if (sizeStr.endsWith('x')) {
+          // For 2x, 3x etc, estimate size (2x = 2x the base, but we'll use the number)
+          size = parseInt(sizeStr) * 100 || 0
+        } else {
+          size = parseInt(sizeStr) || 0
+        }
         if (size > largestSize) {
           largestSize = size
           largestSrcsetUrl = resolveUrl(url, baseUrl)
@@ -141,7 +179,13 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
       alt,
       area,
     })
+    
+    // Debug: log extracted image
+    console.debug(`extractImagesFromHTML: Extracted image: ${largestSrcsetUrl.substring(0, 80)}... (${width}x${height})`)
   }
+  
+  // Debug: log total images found
+  console.log(`extractImagesFromHTML: Extracted ${images.length} images from ${matches.length} img tags`)
   
   // Also extract images from <picture> elements
   const pictureRegex = /<picture[^>]*>([\s\S]*?)<\/picture>/gi
@@ -377,11 +421,10 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
   
   // Build the complete pipeline within the VM
   const logic = b
-    // Step 1: Fetch the webpage using httpFetch atom
-    .httpFetch({ url: A99.args('url') })
-    .as('response')
-    .varGet({ key: 'response.text' })
-    .as('html')
+      // Step 1: Fetch the webpage using httpFetch atom
+      // httpFetch returns the text directly, not a response object
+      .httpFetch({ url: A99.args('url') })
+      .as('html')
     // Step 2: Extract images from HTML
     .extractImagesFromHTML({ 
       html: A99.args('html'), 
@@ -620,23 +663,39 @@ export async function generateCombinedAltText(url: string, llmBaseUrl?: string) 
   // Build the complete pipeline within the VM
   const logic = b
     // Step 1: Fetch the webpage using httpFetch atom
+    // httpFetch may return a Response object (when using custom fetch) or text directly
     .httpFetch({ url: A99.args('url') })
-    .as('response')
-    .varGet({ key: 'response.text' })
+    .as('httpResult')
+    // Step 1.5: Extract text from Response if needed (Response body can only be read once)
+    // Use custom atom to handle both Response objects and strings
+    .extractResponseText({ response: A99.args('httpResult') })
     .as('html')
+    // Store HTML in variable store for validation and later use
+    .varSet({ key: 'html', value: 'html' })
     // Step 2: Extract images and text in parallel (store both)
+    // Get html from state (stored by .as('html') and .varSet)
+    .varGet({ key: 'html' })
+    .as('htmlValue')
     .extractImagesFromHTML({ 
-      html: A99.args('html'), 
+      html: A99.args('htmlValue'), 
       baseUrl: A99.args('url') 
     })
     .as('images')
-    .htmlExtractText({ html: A99.args('html') })
+    .varGet({ key: 'html' })
+    .as('htmlValue2')
+    .htmlExtractText({ html: A99.args('htmlValue2') })
     .as('pageText')
-    // Step 3: Store pageText for prompt construction
+    // Step 3: Store pageText for prompt construction (store the current result)
     .varSet({ key: 'pageText', value: 'pageText' })
+    // Verify pageText was stored by getting it back
+    .varGet({ key: 'pageText' })
+    .as('pageTextVerify')
     // Step 4: Generate page alt-text and topic using LLM
     .buildUserPrompt({ url: A99.args('url') })
     .as('userPrompt')
+    .varSet({ key: 'userPrompt', value: 'userPrompt' })
+    .varGet({ key: 'userPrompt' })
+    .as('userPromptValue')
     .llmPredictBattery({
       system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
 The alt-text should:
@@ -647,7 +706,7 @@ The alt-text should:
 - Focus on what the user would find on the page
 
 You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
-      user: A99.args('userPrompt'),
+      user: A99.args('userPromptValue'),
       responseFormat: {
         type: 'json_schema',
         json_schema: {
@@ -728,8 +787,36 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
     pageTopic = pipelineResult?.result?.pageTopic
     const images = pipelineResult?.result?.images || []
     
+    // Validate that we got meaningful results - check if HTML extraction succeeded
+    const htmlContent = pipelineResult?.vars?.html || ''
+    const pageTextContent = pipelineResult?.vars?.pageText || ''
+    const responseObj = pipelineResult?.vars?.response
+    
+    // Debug: Log response structure
+    if (responseObj) {
+      console.log('Response object keys:', Object.keys(responseObj))
+      if (responseObj.text) {
+        console.log(`Response.text length: ${responseObj.text.length} chars`)
+      } else {
+        console.warn('Response object exists but has no .text property')
+        console.log('Response object sample:', JSON.stringify(responseObj).substring(0, 200))
+      }
+    } else {
+      console.warn('No response object found in pipeline vars')
+    }
+    
+    if (!htmlContent || htmlContent.trim().length === 0) {
+      console.warn('WARNING: No HTML content was fetched from the URL. The LLM response may be generic/hallucinated.')
+      console.warn('Debug - pipeline vars keys:', Object.keys(pipelineResult?.vars || {}))
+    } else if (!pageTextContent || pageTextContent.trim().length === 0) {
+      console.warn('WARNING: HTML was fetched but no text could be extracted. The page may require JavaScript or have no text content.')
+    }
+    
     console.log('Pipeline result - pageAltText:', pageAltText, 'pageTopic:', pageTopic)
     console.log(`Found ${images.length} image(s) on the page`)
+    if (htmlContent) {
+      console.log(`HTML content length: ${htmlContent.length} chars, extracted text length: ${pageTextContent.length} chars`)
+    }
   } catch (vmError: any) {
     console.error('VM execution failed:', vmError.message)
     console.error('VM error stack:', vmError.stack)
@@ -763,6 +850,8 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
           } : undefined,
         })
         .as('scoredCandidates')
+        // Store scoredCandidates as 'candidates' for return
+        .varSet({ key: 'candidates', value: 'scoredCandidates' })
         // Return scored candidates
         .return(
           s.object({
@@ -798,25 +887,33 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
         )
         
         const scoredCandidates = imagePipelineResult?.result?.candidates || []
+        console.log('Image pipeline result:', JSON.stringify(imagePipelineResult?.result || {}).substring(0, 500))
+        console.log('Scored candidates count:', scoredCandidates.length)
         
         if (scoredCandidates.length === 0) {
           console.log('No candidate images processed')
         } else {
-          // Find the most interesting image
-          const mostInteresting = scoredCandidates.reduce((best: any, current: any) => 
-            current.score > best.score ? current : best
-          )
+          console.log('First scored candidate:', JSON.stringify(scoredCandidates[0] || {}).substring(0, 300))
           
-          console.log(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
-          
-          const mostInterestingImage = mostInteresting.img
-          const imageData = mostInteresting.imageData
-          
-          // Generate image alt-text using VM pipeline
-          const altTextVm = createVM()
-          const altTextB = altTextVm.A99
-          
-          const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
+          // Find the most interesting image - with safety check
+          const validScoredCandidates = scoredCandidates.filter((c: any) => c && c.img && c.score !== undefined)
+          if (validScoredCandidates.length === 0) {
+            console.log('No valid scored candidates with img and score')
+          } else {
+            const mostInteresting = validScoredCandidates.reduce((best: any, current: any) => 
+              current.score > best.score ? current : best
+            )
+            
+            console.log(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
+            
+            const mostInterestingImage = mostInteresting.img
+            const imageData = mostInteresting.imageData
+            
+            // Generate image alt-text using VM pipeline
+            const altTextVm = createVM()
+            const altTextB = altTextVm.A99
+            
+            const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
 
 The alt-text should:
 - Be 50-200 characters long
@@ -828,7 +925,7 @@ The alt-text should:
 
 Analyze the provided image carefully and generate appropriate alt-text. Return your response as JSON with "altText" and "description" fields.`
 
-          const userPrompt = `Generate alt-text for this image from the webpage: ${url}
+            const userPrompt = `Generate alt-text for this image from the webpage: ${url}
 
 Image URL: ${mostInterestingImage.url}
 ${mostInterestingImage.alt ? `Existing alt attribute: ${mostInterestingImage.alt}` : 'No existing alt attribute'}
@@ -843,88 +940,89 @@ Please analyze the image and provide a JSON response with:
 - "altText": A concise alt-text (50-200 characters) that considers the page context
 - "description": A more detailed description (optional)`
 
-          const responseFormat = {
-            type: 'json_schema',
-            json_schema: {
-              name: 'image_alt_text_result',
-              schema: {
-                type: 'object',
-                properties: {
-                  altText: {
-                    type: 'string',
-                    description: 'The alt-text suitable for this image (50-200 characters)',
+            const responseFormat = {
+              type: 'json_schema',
+              json_schema: {
+                name: 'image_alt_text_result',
+                schema: {
+                  type: 'object',
+                  properties: {
+                    altText: {
+                      type: 'string',
+                      description: 'The alt-text suitable for this image (50-200 characters)',
+                    },
+                    description: {
+                      type: 'string',
+                      description: 'A more detailed description of the image (optional, for context)',
+                    },
                   },
-                  description: {
-                    type: 'string',
-                    description: 'A more detailed description of the image (optional, for context)',
-                  },
+                  required: ['altText'],
                 },
-                required: ['altText'],
               },
-            },
-          }
-          
-          const altTextLogic = altTextB
-            .llmVisionBattery({
-              system: systemPrompt,
-              userText: userPrompt,
-              imageDataUri: imageData.base64,
-              responseFormat,
-            })
-            .as('summary')
-            .varGet({ key: 'summary.content' })
-            .as('jsonContent')
-            .jsonParse({ str: 'jsonContent' })
-            .as('parsed')
-            .varSet({ key: 'altText', value: 'parsed.altText' })
-            .varSet({ key: 'description', value: 'parsed.description' })
-            .return(
-              s.object({
-                altText: s.string,
-                description: s.any,
-              })
-            )
-          
-          const altTextAst = altTextLogic.toJSON()
-          
-          let imageAltText: string | undefined
-          let imageDescription: string | undefined
-          
-          try {
-            const altTextResult = await altTextVm.run(
-              altTextAst,
-              {},
-              {
-                fuel: 10000,
-                capabilities: customCapabilities,
-              }
-            )
-            
-            imageAltText = altTextResult?.result?.altText
-            imageDescription = altTextResult?.result?.description
-            
-            if (!imageAltText && altTextResult?.result?.summary?.content) {
-              try {
-                const parsed = JSON.parse(altTextResult.result.summary.content)
-                imageAltText = parsed.altText
-                imageDescription = parsed.description
-              } catch {
-                imageAltText = altTextResult.result.summary.content
-              }
             }
-          } catch (vmError: any) {
-            console.error('VM execution failed for image alt-text:', vmError.message)
-            imageAltText = undefined
-            imageDescription = undefined
-          }
-          
-          imageResult = {
-            imageUrl: mostInterestingImage.url,
-            altText: imageAltText || mostInterestingImage.alt || 'Unable to generate alt-text',
-            description: imageDescription || undefined,
-            imageWidth: mostInterestingImage.width,
-            imageHeight: mostInterestingImage.height,
-            imageSize: imageData.size,
+            
+            const altTextLogic = altTextB
+              .llmVisionBattery({
+                system: systemPrompt,
+                userText: userPrompt,
+                imageDataUri: imageData.base64,
+                responseFormat,
+              })
+              .as('summary')
+              .varGet({ key: 'summary.content' })
+              .as('jsonContent')
+              .jsonParse({ str: 'jsonContent' })
+              .as('parsed')
+              .varSet({ key: 'altText', value: 'parsed.altText' })
+              .varSet({ key: 'description', value: 'parsed.description' })
+              .return(
+                s.object({
+                  altText: s.string,
+                  description: s.any,
+                })
+              )
+            
+            const altTextAst = altTextLogic.toJSON()
+            
+            let imageAltText: string | undefined
+            let imageDescription: string | undefined
+            
+            try {
+              const altTextResult = await altTextVm.run(
+                altTextAst,
+                {},
+                {
+                  fuel: 10000,
+                  capabilities: customCapabilities,
+                }
+              )
+              
+              imageAltText = altTextResult?.result?.altText
+              imageDescription = altTextResult?.result?.description
+              
+              if (!imageAltText && altTextResult?.result?.summary?.content) {
+                try {
+                  const parsed = JSON.parse(altTextResult.result.summary.content)
+                  imageAltText = parsed.altText
+                  imageDescription = parsed.description
+                } catch {
+                  imageAltText = altTextResult.result.summary.content
+                }
+              }
+            } catch (vmError: any) {
+              console.error('VM execution failed for image alt-text:', vmError.message)
+              imageAltText = undefined
+              imageDescription = undefined
+            }
+            
+            imageResult = {
+              imageUrl: mostInterestingImage.url,
+              altText: imageAltText || mostInterestingImage.alt || 'Unable to generate alt-text',
+              description: imageDescription || undefined,
+              imageWidth: mostInterestingImage.width,
+              imageHeight: mostInterestingImage.height,
+              imageSize: imageData.size,
+            }
           }
         }
       } catch (imagePipelineError: any) {
@@ -1035,20 +1133,139 @@ async function predictWithVision(
         temperature: 0.7,
         response_format: responseFormat,
       }),
+      signal: AbortSignal.timeout(120000), // 120 second timeout for vision
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`LLM Vision Error: ${response.status} ${response.statusText} - ${errorText}`)
+      let errorMessage: string
+      
+      if (errorText.includes('No models loaded')) {
+        errorMessage = `LLM Vision Error: No model loaded in LM Studio.\n\n` +
+          `To fix this:\n` +
+          `1. Open LM Studio\n` +
+          `2. Go to the "Chat" tab\n` +
+          `3. Select and load a model from the dropdown\n` +
+          `4. Ensure the Local Server is running (View → Local Server)\n` +
+          `5. Try again`
+      } else if (response.status === 401) {
+        errorMessage = `LLM Vision Error: Authentication failed (401 Unauthorized).\n\n` +
+          `The LLM server at ${llmBaseUrl} requires authentication.\n` +
+          `Please check your API key or authentication settings.`
+      } else if (response.status === 404) {
+        errorMessage = `LLM Vision Error: Endpoint not found (404).\n\n` +
+          `The LLM server at ${llmBaseUrl} does not have the /chat/completions endpoint.\n` +
+          `Please verify the server URL is correct and the server supports OpenAI-compatible vision API.`
+      } else if (response.status === 429) {
+        errorMessage = `LLM Vision Error: Rate limit exceeded (429).\n\n` +
+          `The LLM server is receiving too many requests.\n` +
+          `Please wait a moment and try again.`
+      } else if (response.status >= 500) {
+        errorMessage = `LLM Vision Error: Server error (${response.status}).\n\n` +
+          `The LLM server at ${llmBaseUrl} encountered an internal error.\n` +
+          `Please check if the server is running properly and try again later.`
+      } else {
+        errorMessage = `LLM Vision Error: ${response.status} ${response.statusText}\n\n` +
+          `Server: ${llmBaseUrl}\n` +
+          `Details: ${errorText.substring(0, 200)}`
+      }
+      
+      throw new Error(errorMessage)
     }
 
     const data = await response.json() as any
     return data.choices[0]?.message ?? { content: '' }
   } catch (error: any) {
-    if (error.cause?.code === 'ECONNREFUSED') {
-      throw new Error(`No LLM provider configured at ${llmBaseUrl}. Please start LM Studio or provide an API key.`)
+    // Handle connection errors with helpful messages
+    const errorCode = error.cause?.code || error.code
+    const errorMessage = error.message || String(error)
+    
+    if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
+      throw new Error(
+        `LLM Vision Connection Failed: Cannot connect to LLM server.\n\n` +
+        `Server URL: ${llmBaseUrl}\n\n` +
+        `Possible solutions:\n` +
+        `1. Ensure LM Studio is running and the Local Server is started\n` +
+        `2. Check that the server URL is correct (should be like http://localhost:1234/v1)\n` +
+        `3. Verify the server is accessible from this machine\n` +
+        `4. Check your firewall settings\n\n` +
+        `To start LM Studio server:\n` +
+        `- Open LM Studio\n` +
+        `- Load a model in the Chat tab\n` +
+        `- Go to View → Local Server\n` +
+        `- Click "Start Server"`
+      )
+    } else if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+      throw new Error(
+        `LLM Vision Connection Failed: Cannot resolve server hostname.\n\n` +
+        `Server URL: ${llmBaseUrl}\n\n` +
+        `The hostname in the URL cannot be resolved.\n` +
+        `Please check:\n` +
+        `1. The server URL is correct\n` +
+        `2. Your network connection is working\n` +
+        `3. DNS resolution is working properly`
+      )
+    } else if (errorCode === 'ETIMEDOUT' || errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT')) {
+      throw new Error(
+        `LLM Vision Connection Failed: Request timed out.\n\n` +
+        `Server URL: ${llmBaseUrl}\n\n` +
+        `The LLM server did not respond within 120 seconds.\n` +
+        `Vision requests can take longer - this might indicate:\n` +
+        `1. The server is overloaded or slow\n` +
+        `2. Network connectivity issues\n` +
+        `3. The server is not running or not accessible\n\n` +
+        `Please check the server status and try again.`
+      )
+    } else if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
+      throw new Error(
+        `LLM Vision Connection Failed: Connection was reset by the server.\n\n` +
+        `Server URL: ${llmBaseUrl}\n\n` +
+        `The connection was unexpectedly closed by the server.\n` +
+        `This might indicate:\n` +
+        `1. The server crashed or restarted\n` +
+        `2. Network instability\n` +
+        `3. The server rejected the connection\n\n` +
+        `Please check the server status and try again.`
+      )
+    } else if (error.name === 'AbortError' || errorMessage.includes('aborted')) {
+      throw new Error(
+        `LLM Vision Connection Failed: Request was aborted (timeout).\n\n` +
+        `Server URL: ${llmBaseUrl}\n\n` +
+        `The request took too long and was cancelled.\n` +
+        `Vision requests can take longer - this might indicate:\n` +
+        `1. The server is very slow or unresponsive\n` +
+        `2. The model is taking too long to process the image\n` +
+        `3. Network issues\n\n` +
+        `Please try again or use a faster model.`
+      )
+    } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
+      throw new Error(
+        `LLM Vision Connection Failed: Network request failed.\n\n` +
+        `Server URL: ${llmBaseUrl}\n\n` +
+        `Unable to make a network request to the LLM server.\n` +
+        `Please check:\n` +
+        `1. The server URL is correct\n` +
+        `2. The server is running and accessible\n` +
+        `3. Your network connection is working\n` +
+        `4. CORS settings (if accessing a remote server)`
+      )
     }
-    throw error
+    
+    // If it's already a formatted error message, re-throw it
+    if (errorMessage.includes('LLM Vision Error:') || errorMessage.includes('LLM Vision Connection Failed:')) {
+      throw error
+    }
+    
+    // Otherwise, provide a generic but helpful error
+    throw new Error(
+      `LLM Vision Connection Failed: ${errorMessage}\n\n` +
+      `Server URL: ${llmBaseUrl}\n\n` +
+      `Please check:\n` +
+      `1. The server is running and accessible\n` +
+      `2. The URL is correct\n` +
+      `3. Your network connection is working\n` +
+      `4. The server supports the OpenAI-compatible vision API format`
+    )
   }
 }
 
@@ -1059,6 +1276,23 @@ function createCustomCapabilities(llmBaseUrl: string) {
   // Start with standard batteries
   const customCaps = { ...batteries }
   
+  // Helper to get available model from LM Studio
+  async function getAvailableModel(): Promise<string | null> {
+    try {
+      const modelsResponse = await fetch(`${llmBaseUrl}/models`)
+      if (modelsResponse.ok) {
+        const modelsData = await modelsResponse.json() as any
+        const models = modelsData.data || modelsData
+        if (Array.isArray(models) && models.length > 0) {
+          return models[0].id || models[0].name || null
+        }
+      }
+    } catch {
+      // Ignore errors, will fall back to not specifying model
+    }
+    return null
+  }
+  
   // Override LLM capability with custom URL
   customCaps.llm = {
     async predict(system: string, user: string, tools?: any[], responseFormat?: any) {
@@ -1068,28 +1302,164 @@ function createCustomCapabilities(llmBaseUrl: string) {
           { role: 'user', content: user },
         ]
 
+        // Try to get available model
+        const model = await getAvailableModel()
+        const requestBody: any = {
+          messages,
+          temperature: 0.7,
+        }
+        
+        // Add model if available (LM Studio will auto-select if not specified, but some APIs require it)
+        if (model) {
+          requestBody.model = model
+        }
+        
+        // Add optional parameters
+        if (tools) {
+          requestBody.tools = tools
+        }
+        if (responseFormat) {
+          requestBody.response_format = responseFormat
+        }
+
         const response = await fetch(`${llmBaseUrl}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages,
-            temperature: 0.7,
-            tools,
-            response_format: responseFormat,
-          }),
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(60000), // 60 second timeout
         })
 
         if (!response.ok) {
-          throw new Error(`LLM Error: ${response.status} ${response.statusText}`)
+          const errorText = await response.text()
+          let errorMessage: string
+          
+          // Provide helpful error messages for common issues
+          if (errorText.includes('No models loaded')) {
+            errorMessage = `LLM Error: No model loaded in LM Studio.\n\n` +
+              `To fix this:\n` +
+              `1. Open LM Studio\n` +
+              `2. Go to the "Chat" tab\n` +
+              `3. Select and load a model from the dropdown\n` +
+              `4. Ensure the Local Server is running (View → Local Server)\n` +
+              `5. Try again`
+          } else if (response.status === 401) {
+            errorMessage = `LLM Error: Authentication failed (401 Unauthorized).\n\n` +
+              `The LLM server at ${llmBaseUrl} requires authentication.\n` +
+              `Please check your API key or authentication settings.`
+          } else if (response.status === 404) {
+            errorMessage = `LLM Error: Endpoint not found (404).\n\n` +
+              `The LLM server at ${llmBaseUrl} does not have the /chat/completions endpoint.\n` +
+              `Please verify the server URL is correct and the server supports OpenAI-compatible API.`
+          } else if (response.status === 429) {
+            errorMessage = `LLM Error: Rate limit exceeded (429).\n\n` +
+              `The LLM server is receiving too many requests.\n` +
+              `Please wait a moment and try again.`
+          } else if (response.status >= 500) {
+            errorMessage = `LLM Error: Server error (${response.status}).\n\n` +
+              `The LLM server at ${llmBaseUrl} encountered an internal error.\n` +
+              `Please check if the server is running properly and try again later.`
+          } else {
+            errorMessage = `LLM Error: ${response.status} ${response.statusText}\n\n` +
+              `Server: ${llmBaseUrl}\n` +
+              `Details: ${errorText.substring(0, 200)}`
+          }
+          
+          throw new Error(errorMessage)
         }
 
         const data = await response.json() as any
         return data.choices[0]?.message ?? { content: '' }
       } catch (error: any) {
-        if (error.cause?.code === 'ECONNREFUSED') {
-          throw new Error(`No LLM provider configured at ${llmBaseUrl}. Please start LM Studio or provide an API key.`)
+        // Handle connection errors with helpful messages
+        const errorCode = error.cause?.code || error.code
+        const errorMessage = error.message || String(error)
+        
+        if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
+          throw new Error(
+            `LLM Connection Failed: Cannot connect to LLM server.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `Possible solutions:\n` +
+            `1. Ensure LM Studio is running and the Local Server is started\n` +
+            `2. Check that the server URL is correct (should be like http://localhost:1234/v1)\n` +
+            `3. Verify the server is accessible from this machine\n` +
+            `4. Check your firewall settings\n\n` +
+            `To start LM Studio server:\n` +
+            `- Open LM Studio\n` +
+            `- Load a model in the Chat tab\n` +
+            `- Go to View → Local Server\n` +
+            `- Click "Start Server"`
+          )
+        } else if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+          throw new Error(
+            `LLM Connection Failed: Cannot resolve server hostname.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The hostname in the URL cannot be resolved.\n` +
+            `Please check:\n` +
+            `1. The server URL is correct\n` +
+            `2. Your network connection is working\n` +
+            `3. DNS resolution is working properly`
+          )
+        } else if (errorCode === 'ETIMEDOUT' || errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT')) {
+          throw new Error(
+            `LLM Connection Failed: Request timed out.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The LLM server did not respond within 60 seconds.\n` +
+            `Possible causes:\n` +
+            `1. The server is overloaded or slow\n` +
+            `2. Network connectivity issues\n` +
+            `3. The server is not running or not accessible\n\n` +
+            `Please check the server status and try again.`
+          )
+        } else if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
+          throw new Error(
+            `LLM Connection Failed: Connection was reset by the server.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The connection was unexpectedly closed by the server.\n` +
+            `This might indicate:\n` +
+            `1. The server crashed or restarted\n` +
+            `2. Network instability\n` +
+            `3. The server rejected the connection\n\n` +
+            `Please check the server status and try again.`
+          )
+        } else if (error.name === 'AbortError' || errorMessage.includes('aborted')) {
+          throw new Error(
+            `LLM Connection Failed: Request was aborted (timeout).\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The request took too long and was cancelled.\n` +
+            `This might indicate:\n` +
+            `1. The server is very slow or unresponsive\n` +
+            `2. The model is taking too long to process\n` +
+            `3. Network issues\n\n` +
+            `Please try again or use a faster model.`
+          )
+        } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
+          throw new Error(
+            `LLM Connection Failed: Network request failed.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `Unable to make a network request to the LLM server.\n` +
+            `Please check:\n` +
+            `1. The server URL is correct\n` +
+            `2. The server is running and accessible\n` +
+            `3. Your network connection is working\n` +
+            `4. CORS settings (if accessing a remote server)`
+          )
         }
-        throw error
+        
+        // If it's already a formatted error message, re-throw it
+        if (errorMessage.includes('LLM Error:') || errorMessage.includes('LLM Connection Failed:')) {
+          throw error
+        }
+        
+        // Otherwise, provide a generic but helpful error
+        throw new Error(
+          `LLM Connection Failed: ${errorMessage}\n\n` +
+          `Server URL: ${llmBaseUrl}\n\n` +
+          `Please check:\n` +
+          `1. The server is running and accessible\n` +
+          `2. The URL is correct\n` +
+          `3. Your network connection is working\n` +
+          `4. The server supports the OpenAI-compatible API format`
+        )
       }
     },
     async predictWithVision(system: string, userText: string, imageDataUri: string, responseFormat?: any) {
@@ -1111,28 +1481,161 @@ function createCustomCapabilities(llmBaseUrl: string) {
           },
         ]
 
+        // Try to get available model
+        const model = await getAvailableModel()
+        const requestBody: any = {
+          messages,
+          temperature: 0.7,
+        }
+        
+        // Add model if available
+        if (model) {
+          requestBody.model = model
+        }
+        
+        // Add optional parameters
+        if (responseFormat) {
+          requestBody.response_format = responseFormat
+        }
+
         const response = await fetch(`${llmBaseUrl}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages,
-            temperature: 0.7,
-            response_format: responseFormat,
-          }),
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(120000), // 120 second timeout for vision (longer)
         })
 
         if (!response.ok) {
           const errorText = await response.text()
-          throw new Error(`LLM Vision Error: ${response.status} ${response.statusText} - ${errorText}`)
+          let errorMessage: string
+          
+          // Provide helpful error messages for common issues
+          if (errorText.includes('No models loaded')) {
+            errorMessage = `LLM Vision Error: No model loaded in LM Studio.\n\n` +
+              `To fix this:\n` +
+              `1. Open LM Studio\n` +
+              `2. Go to the "Chat" tab\n` +
+              `3. Select and load a model from the dropdown\n` +
+              `4. Ensure the Local Server is running (View → Local Server)\n` +
+              `5. Try again`
+          } else if (response.status === 401) {
+            errorMessage = `LLM Vision Error: Authentication failed (401 Unauthorized).\n\n` +
+              `The LLM server at ${llmBaseUrl} requires authentication.\n` +
+              `Please check your API key or authentication settings.`
+          } else if (response.status === 404) {
+            errorMessage = `LLM Vision Error: Endpoint not found (404).\n\n` +
+              `The LLM server at ${llmBaseUrl} does not have the /chat/completions endpoint.\n` +
+              `Please verify the server URL is correct and the server supports OpenAI-compatible vision API.`
+          } else if (response.status === 429) {
+            errorMessage = `LLM Vision Error: Rate limit exceeded (429).\n\n` +
+              `The LLM server is receiving too many requests.\n` +
+              `Please wait a moment and try again.`
+          } else if (response.status >= 500) {
+            errorMessage = `LLM Vision Error: Server error (${response.status}).\n\n` +
+              `The LLM server at ${llmBaseUrl} encountered an internal error.\n` +
+              `Please check if the server is running properly and try again later.`
+          } else {
+            errorMessage = `LLM Vision Error: ${response.status} ${response.statusText}\n\n` +
+              `Server: ${llmBaseUrl}\n` +
+              `Details: ${errorText.substring(0, 200)}`
+          }
+          
+          throw new Error(errorMessage)
         }
 
         const data = await response.json() as any
         return data.choices[0]?.message ?? { content: '' }
       } catch (error: any) {
-        if (error.cause?.code === 'ECONNREFUSED') {
-          throw new Error(`No LLM provider configured at ${llmBaseUrl}. Please start LM Studio or provide an API key.`)
+        // Handle connection errors with helpful messages (same as predict)
+        const errorCode = error.cause?.code || error.code
+        const errorMessage = error.message || String(error)
+        
+        if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
+          throw new Error(
+            `LLM Vision Connection Failed: Cannot connect to LLM server.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `Possible solutions:\n` +
+            `1. Ensure LM Studio is running and the Local Server is started\n` +
+            `2. Check that the server URL is correct (should be like http://localhost:1234/v1)\n` +
+            `3. Verify the server is accessible from this machine\n` +
+            `4. Check your firewall settings\n\n` +
+            `To start LM Studio server:\n` +
+            `- Open LM Studio\n` +
+            `- Load a model in the Chat tab\n` +
+            `- Go to View → Local Server\n` +
+            `- Click "Start Server"`
+          )
+        } else if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+          throw new Error(
+            `LLM Vision Connection Failed: Cannot resolve server hostname.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The hostname in the URL cannot be resolved.\n` +
+            `Please check:\n` +
+            `1. The server URL is correct\n` +
+            `2. Your network connection is working\n` +
+            `3. DNS resolution is working properly`
+          )
+        } else if (errorCode === 'ETIMEDOUT' || errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT')) {
+          throw new Error(
+            `LLM Vision Connection Failed: Request timed out.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The LLM server did not respond within 120 seconds.\n` +
+            `Vision requests can take longer - this might indicate:\n` +
+            `1. The server is overloaded or slow\n` +
+            `2. Network connectivity issues\n` +
+            `3. The server is not running or not accessible\n\n` +
+            `Please check the server status and try again.`
+          )
+        } else if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
+          throw new Error(
+            `LLM Vision Connection Failed: Connection was reset by the server.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The connection was unexpectedly closed by the server.\n` +
+            `This might indicate:\n` +
+            `1. The server crashed or restarted\n` +
+            `2. Network instability\n` +
+            `3. The server rejected the connection\n\n` +
+            `Please check the server status and try again.`
+          )
+        } else if (error.name === 'AbortError' || errorMessage.includes('aborted')) {
+          throw new Error(
+            `LLM Vision Connection Failed: Request was aborted (timeout).\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `The request took too long and was cancelled.\n` +
+            `Vision requests can take longer - this might indicate:\n` +
+            `1. The server is very slow or unresponsive\n` +
+            `2. The model is taking too long to process the image\n` +
+            `3. Network issues\n\n` +
+            `Please try again or use a faster model.`
+          )
+        } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
+          throw new Error(
+            `LLM Vision Connection Failed: Network request failed.\n\n` +
+            `Server URL: ${llmBaseUrl}\n\n` +
+            `Unable to make a network request to the LLM server.\n` +
+            `Please check:\n` +
+            `1. The server URL is correct\n` +
+            `2. The server is running and accessible\n` +
+            `3. Your network connection is working\n` +
+            `4. CORS settings (if accessing a remote server)`
+          )
         }
-        throw error
+        
+        // If it's already a formatted error message, re-throw it
+        if (errorMessage.includes('LLM Vision Error:') || errorMessage.includes('LLM Vision Connection Failed:')) {
+          throw error
+        }
+        
+        // Otherwise, provide a generic but helpful error
+        throw new Error(
+          `LLM Vision Connection Failed: ${errorMessage}\n\n` +
+          `Server URL: ${llmBaseUrl}\n\n` +
+          `Please check:\n` +
+          `1. The server is running and accessible\n` +
+          `2. The URL is correct\n` +
+          `3. Your network connection is working\n` +
+          `4. The server supports the OpenAI-compatible vision API format`
+        )
       }
     },
     async embed(text: string) {
@@ -1162,6 +1665,55 @@ function createCustomCapabilities(llmBaseUrl: string) {
 }
 
 /**
+ * Custom atom for extracting text from HTTP response
+ * Extracts the .text property from a response object
+ */
+const extractResponseText = defineAtom(
+  'extractResponseText',
+  s.object({ response: s.any }), // Accept response object as parameter
+  s.string,
+  async ({ response }: { response: any }, ctx: any) => {
+    // Handle argument references - resolve from state
+    let actualResponse = response
+    if (response && typeof response === 'object' && '$kind' in response && response.$kind === 'arg') {
+      console.log('extractResponseText: Got argument reference, resolving from state. Path:', response.path)
+      actualResponse = ctx.state?.[response.path] || ctx.vars?.[response.path]
+      console.log('extractResponseText: Resolved response type:', typeof actualResponse)
+    }
+    
+    // Handle different response formats
+    if (typeof actualResponse === 'string') {
+      console.log(`extractResponseText: Response is already a string, length: ${actualResponse.length} chars`)
+      return actualResponse
+    } else if (actualResponse && typeof actualResponse === 'object') {
+      // Check if it's a Response object with .text() method
+      if ('text' in actualResponse && typeof actualResponse.text === 'function') {
+        console.log('extractResponseText: Found Response object with .text() method, calling it')
+        const text = await actualResponse.text()
+        console.log(`extractResponseText: Got text from Response, length: ${text.length} chars`)
+        return text
+      } else if ('text' in actualResponse && typeof actualResponse.text === 'string') {
+        console.log(`extractResponseText: Extracted text property, length: ${actualResponse.text.length} chars`)
+        return actualResponse.text
+      } else if ('content' in actualResponse && typeof actualResponse.content === 'string') {
+        console.log(`extractResponseText: Extracted content, length: ${actualResponse.content.length} chars`)
+        return actualResponse.content
+      } else if ('body' in actualResponse && typeof actualResponse.body === 'string') {
+        console.log(`extractResponseText: Extracted body, length: ${actualResponse.body.length} chars`)
+        return actualResponse.body
+      } else {
+        console.warn('extractResponseText: Response object has no extractable text property')
+        console.warn('extractResponseText: Response keys:', Object.keys(actualResponse || {}))
+        return ''
+      }
+    }
+    console.warn('extractResponseText: Invalid response type:', typeof actualResponse)
+    return ''
+  },
+  { docs: 'Extract text content from HTTP response object (handles Response objects and strings)', cost: 1 }
+)
+
+/**
  * Custom atom for extracting text from HTML
  * This keeps HTML processing within the VM execution model
  */
@@ -1170,7 +1722,53 @@ const htmlExtractText = defineAtom(
   s.object({ html: s.string }),
   s.string,
   async ({ html }: { html: string }, ctx: any) => {
-    return extractTextFromHTML(html)
+    // Debug: Log HTML input
+    console.log('htmlExtractText: Received HTML type:', typeof html)
+    
+    // Handle argument references - resolve from state
+    let actualHtml = html
+    if (html && typeof html === 'object' && '$kind' in html && html.$kind === 'arg') {
+      console.log('htmlExtractText: Got argument reference, resolving from state. Path:', html.path)
+      actualHtml = ctx.state?.[html.path] || ctx.vars?.[html.path]
+      console.log('htmlExtractText: Resolved HTML type:', typeof actualHtml)
+      // Note: HTML should already be extracted text at this point (via extractResponseText)
+      // But handle Response objects just in case
+      if (actualHtml && typeof actualHtml === 'object') {
+        console.log('htmlExtractText: Resolved HTML is object, keys:', Object.keys(actualHtml))
+        // If it's a Response object, this is an error - should have been extracted earlier
+        if ('text' in actualHtml && typeof actualHtml.text === 'function') {
+          console.error('htmlExtractText: ERROR - Found Response object! This should have been extracted by extractResponseText atom')
+          // Don't call .text() here as it may have already been consumed
+          return ''
+        } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
+          console.log('htmlExtractText: Found .text property, using it')
+          actualHtml = actualHtml.text
+        }
+      } else if (typeof actualHtml === 'string') {
+        console.log('htmlExtractText: Resolved HTML is string, length:', actualHtml.length)
+      }
+    }
+    
+    if (!actualHtml) {
+      console.warn('htmlExtractText: Received null/undefined HTML')
+      // Try to get from context if not provided directly
+      const htmlFromContext = ctx.vars?.html || ctx.state?.html
+      if (htmlFromContext) {
+        console.log('htmlExtractText: Found HTML in context, length:', htmlFromContext.length)
+        return extractTextFromHTML(String(htmlFromContext))
+      }
+      return ''
+    }
+    if (typeof actualHtml !== 'string') {
+      console.warn('htmlExtractText: HTML is not a string, converting. Type:', typeof actualHtml)
+      actualHtml = String(actualHtml)
+    }
+    if (actualHtml.length === 0) {
+      console.warn('htmlExtractText: Received empty HTML string')
+      return ''
+    }
+    console.log(`htmlExtractText: Processing HTML, length: ${actualHtml.length} chars`)
+    return extractTextFromHTML(actualHtml)
   },
   { docs: 'Extract text content from HTML string', cost: 1 }
 )
@@ -1191,7 +1789,70 @@ const extractImagesFromHTMLAtom = defineAtom(
     size: s.any,
   })),
   async ({ html, baseUrl }: { html: string; baseUrl: string }, ctx: any) => {
-    return extractImagesFromHTML(html, baseUrl)
+    // Ensure html is a string - handle cases where it might be an object or undefined
+    let htmlString: string
+    
+    // Handle argument references - resolve from state
+    let actualHtml = html
+    if (html && typeof html === 'object' && html !== null && '$kind' in html && html.$kind === 'arg') {
+      console.log('extractImagesFromHTMLAtom: Got argument reference, resolving from state. Path:', html.path)
+      actualHtml = ctx.state?.[html.path] || ctx.vars?.[html.path]
+      console.log('extractImagesFromHTMLAtom: Resolved HTML type:', typeof actualHtml)
+      // Note: HTML should already be extracted text at this point (via extractResponseText)
+      // But handle Response objects just in case
+      if (actualHtml && typeof actualHtml === 'object') {
+        console.log('extractImagesFromHTMLAtom: Resolved HTML is object, keys:', Object.keys(actualHtml))
+        // If it's a Response object, this is an error - should have been extracted earlier
+        if ('text' in actualHtml && typeof actualHtml.text === 'function') {
+          console.error('extractImagesFromHTMLAtom: ERROR - Found Response object! This should have been extracted by extractResponseText atom')
+          // Don't call .text() here as it may have already been consumed
+          return []
+        } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
+          console.log('extractImagesFromHTMLAtom: Found .text property, using it')
+          actualHtml = actualHtml.text
+        }
+      } else if (typeof actualHtml === 'string') {
+        console.log('extractImagesFromHTMLAtom: Resolved HTML is string, length:', actualHtml.length)
+      }
+    }
+    
+    // First try the direct parameter
+    if (typeof actualHtml === 'string' && actualHtml.length > 0) {
+      htmlString = actualHtml
+    } else if (actualHtml && typeof actualHtml === 'object' && actualHtml !== null) {
+      // Try to extract from object
+      if ('text' in html && typeof (html as any).text === 'string') {
+        htmlString = String((html as any).text)
+      } else if ('content' in html && typeof (html as any).content === 'string') {
+        htmlString = String((html as any).content)
+      } else if ('html' in html && typeof (html as any).html === 'string') {
+        htmlString = String((html as any).html)
+      } else {
+        // Try to get from variable store as fallback
+        htmlString = String(ctx.state?.html || ctx.vars?.html || ctx.vars?.['response.text'] || '')
+      }
+    } else {
+      // Try to get from variable store as fallback
+      htmlString = String(ctx.state?.html || ctx.vars?.html || ctx.vars?.['response.text'] || actualHtml || '')
+    }
+    
+    // Ensure baseUrl is a string
+    let baseUrlString: string
+    if (typeof baseUrl === 'string' && baseUrl.length > 0) {
+      baseUrlString = baseUrl
+    } else if (baseUrl && typeof baseUrl === 'object' && baseUrl !== null && 'url' in baseUrl) {
+      baseUrlString = String((baseUrl as any).url)
+    } else {
+      baseUrlString = String(ctx.vars?.url || baseUrl || '')
+    }
+    
+    // Final validation
+    if (!htmlString || htmlString.length === 0) {
+      console.warn('extractImagesFromHTMLAtom: No HTML content provided')
+      return []
+    }
+    
+    return extractImagesFromHTML(htmlString, baseUrlString)
   },
   { docs: 'Extract image information from HTML string', cost: 5 }
 )
@@ -1222,7 +1883,20 @@ const filterCandidateImagesAtom = defineAtom(
     size: s.any,
   })),
   async ({ images, maxCandidates = 3 }: { images: ImageInfo[]; maxCandidates?: number }, ctx: any) => {
-    return filterCandidateImages(images, maxCandidates)
+    // Resolve argument references (check args first for values passed to vm.run())
+    let actualImages = images
+    if (images && typeof images === 'object' && '$kind' in images && images.$kind === 'arg') {
+      console.log('filterCandidateImages: Resolving images. Path:', images.path)
+      actualImages = ctx.args?.[images.path] || ctx.state?.[images.path] || ctx.vars?.[images.path] || []
+      console.log('filterCandidateImages: Resolved to array of length:', actualImages?.length || 0)
+    }
+    
+    if (!Array.isArray(actualImages)) {
+      console.error('filterCandidateImages: images is not an array:', typeof actualImages)
+      return []
+    }
+    
+    return filterCandidateImages(actualImages, maxCandidates)
   },
   { docs: 'Filter images to candidates larger than icon size', cost: 1 }
 )
@@ -1237,19 +1911,51 @@ const buildUserPrompt = defineAtom(
   s.object({ url: s.string }),
   s.string,
   async ({ url }: { url: string }, ctx: any) => {
-    // Get pageText from the current result (previous pipeline step)
-    // In agent-99, the current result is available via the context
-    // For now, we'll get it from the variable store where we stored it
-    const pageText = ctx.vars?.pageText || ''
+    // Resolve URL argument reference (check args first, then state/vars)
+    let resolvedUrl = url
+    if (url && typeof url === 'object' && '$kind' in url && url.$kind === 'arg') {
+      resolvedUrl = ctx.args?.[url.path] || ctx.state?.[url.path] || ctx.vars?.[url.path] || ''
+    }
+    
+    // Get pageText from the variable store where we stored it
+    // Try both vars and state (different agent-99 versions might use different locations)
+    const pageText = ctx.state?.pageText || ctx.vars?.pageText || ''
+    console.log('buildUserPrompt: URL:', resolvedUrl)
+    console.log('buildUserPrompt: Retrieved pageText type:', typeof pageText, 'length:', pageText?.length || 0)
+    
     // Limit pageText to 3000 chars for token efficiency
     const limitedText = typeof pageText === 'string' ? pageText.substring(0, 3000) : String(pageText || '')
-    return `Generate alt-text for a link to this webpage: ${url}
+    
+    // Validate that we have actual content - if pageText is empty, this indicates HTML extraction failed
+    if (!limitedText || limitedText.trim().length === 0) {
+      console.warn(`buildUserPrompt: No page text extracted from ${resolvedUrl} - HTML extraction may have failed`)
+      console.warn('buildUserPrompt: pageText value:', pageText)
+      console.warn('buildUserPrompt: ctx.state keys:', Object.keys(ctx.state || {}))
+      console.warn('buildUserPrompt: ctx.vars keys:', Object.keys(ctx.vars || {}))
+      // Return a prompt that explicitly states no content was found
+      return `Generate alt-text for a link to this webpage: ${resolvedUrl}
+
+WARNING: No text content could be extracted from this webpage. The HTML may be empty, inaccessible, or the page may require JavaScript to render content.
+
+Since no content is available, please return a JSON response with:
+- "altText": A generic description based on the URL domain (e.g., "ABC News website" for abc.net.au)
+- "topic": A generic topic based on the domain
+
+Return your response as JSON with "altText" and "topic" fields.`
+    }
+    
+    // Debug: Log first 200 chars of extracted text to verify content
+    console.log('buildUserPrompt: Sending to LLM - first 200 chars:', limitedText.substring(0, 200).replace(/\n/g, ' '))
+    
+    return `Generate alt-text for a link to this webpage: ${resolvedUrl}
 
 Here is the extracted text content from the webpage (first 3000 characters):
 
 ${limitedText}
 
-Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`
+Based on this ACTUAL content from the page, generate a concise alt-text summary suitable for accessibility purposes. 
+IMPORTANT: Your response MUST be based on the actual content above, not on assumptions about what the page might contain.
+Return your response as JSON with "altText" and "topic" fields.`
   },
   { docs: 'Build user prompt for LLM from URL (param) and pageText (from variable store)', cost: 1 }
 )
@@ -1274,8 +1980,34 @@ const llmPredictBatteryLongTimeout = defineAtom(
     if (!llmCap?.predict) {
       throw new Error("Capability 'llm' missing or invalid.")
     }
-    const resolvedSystem = (system && system !== '') ? system : 'You are a helpful agent.'
-    const resolvedUser = user
+    
+    // Helper to resolve argument references
+    const resolveArg = (value: any): any => {
+      if (value && typeof value === 'object' && '$kind' in value && value.$kind === 'arg') {
+        return ctx.state?.[value.path] || ctx.vars?.[value.path] || ''
+      }
+      return value
+    }
+    
+    const resolvedSystem = (system && system !== '') ? resolveArg(system) : 'You are a helpful agent.'
+    
+    // Resolve user argument reference first
+    let userValue = resolveArg(user)
+    
+    // Ensure user is a string
+    let resolvedUser: string
+    if (typeof userValue === 'string') {
+      resolvedUser = userValue
+    } else if (userValue && typeof userValue === 'object' && 'content' in userValue) {
+      resolvedUser = String(userValue.content)
+    } else {
+      resolvedUser = String(userValue || '')
+    }
+    
+    // Debug: Log what we're actually sending to the LLM
+    console.log('llmPredictBattery: User prompt length:', resolvedUser.length, 'chars')
+    console.log('llmPredictBattery: First 100 chars:', resolvedUser.substring(0, 100).replace(/\n/g, ' '))
+    
     const resolvedTools = tools || undefined
     const resolvedFormat = responseFormat || undefined
     return llmCap.predict(resolvedSystem, resolvedUser, resolvedTools, resolvedFormat)
@@ -1383,12 +2115,25 @@ const processCandidateImagesAtom = defineAtom(
     score: s.number,
   })),
   async ({ candidates, pageContext }: any, ctx: any) => {
+    // Resolve argument references (check args first for values passed to vm.run())
+    let actualCandidates = candidates
+    if (candidates && typeof candidates === 'object' && '$kind' in candidates && candidates.$kind === 'arg') {
+      console.log('processCandidateImages: Resolving candidates. Path:', candidates.path)
+      actualCandidates = ctx.args?.[candidates.path] || ctx.state?.[candidates.path] || ctx.vars?.[candidates.path] || []
+      console.log('processCandidateImages: Resolved to array of length:', actualCandidates?.length || 0)
+    }
+    
+    if (!Array.isArray(actualCandidates)) {
+      console.error('processCandidateImages: candidates is not an array:', typeof actualCandidates)
+      return []
+    }
+    
     const fetchCap = ctx.capabilities.fetch || fetch
     const llmCap = ctx.capabilities.llm
     
     // Fetch image data for all candidates in parallel
     const candidateData = await Promise.all(
-      candidates.map(async (img: ImageInfo) => {
+      actualCandidates.map(async (img: ImageInfo) => {
         try {
           const response = await fetchCap(img.url)
           if (!response.ok) {
@@ -1584,6 +2329,7 @@ function createVM() {
     storeSearch,
     llmPredictBattery: llmPredictBatteryLongTimeout, // Use custom atom with longer timeout
     llmVisionBattery, // Register vision atom for image processing
+    extractResponseText, // Register response text extraction atom
     htmlExtractText, // Register HTML text extraction atom
     buildUserPrompt, // Register user prompt builder atom
     extractImagesFromHTML: extractImagesFromHTMLAtom, // Register image extraction atom
@@ -1719,6 +2465,11 @@ export async function generateAltText(url: string, llmBaseUrl?: string) {
       url: A99.args('url'),
     })
     .as('userPrompt')
+    // Store userPrompt in variable store for LLM call
+    .varSet({ key: 'userPrompt', value: 'userPrompt' })
+    // Get userPrompt from variable store to pass to LLM
+    .varGet({ key: 'userPrompt' })
+    .as('userPromptValue')
     // Use LLM to generate alt-text from the extracted page content
     .llmPredictBattery({
       system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
@@ -1730,7 +2481,7 @@ The alt-text should:
 - Focus on what the user would find on the page
 
 You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
-      user: A99.args('userPrompt'),
+      user: A99.args('userPromptValue'),
       responseFormat: {
         type: 'json_schema',
         json_schema: {
