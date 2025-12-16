@@ -12,8 +12,8 @@ const b = vm.A99
 // 2. Build pipeline
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') })  // Extract text from Response
   .as('html')
   .myCustomAtom({ input: A99.args('html') })
   .as('result')
@@ -37,7 +37,8 @@ const result = await vm.run(
 
 | Operation | Usage | Description |
 |-----------|-------|-------------|
-| `.httpFetch({ url })` | Fetch HTTP resources | Capability-based HTTP requests |
+| `.httpFetch({ url })` | Fetch HTTP resources | Returns Response object |
+| `.extractResponseText({ response })` | Extract text from Response | Use after httpFetch |
 | `.as('alias')` | Create alias | Reference result in later steps |
 | `.varGet({ key })` | Get variable | Access stored values |
 | `.varSet({ key, value })` | Set variable | Store values for later |
@@ -90,8 +91,10 @@ vm.run(ast, { url, pageContext }, { fuel, capabilities })
 
 // Retrieve
 .varGet({ key: 'myKey' })
-.varGet({ key: 'response.text' })  // Nested access
+.varGet({ key: 'summary.content' })  // Nested access for LLM responses
 ```
+
+**Note**: For HTTP responses, use `extractResponseText` atom instead of `.varGet({ key: 'response.text' })` as `httpFetch` returns a Response object.
 
 ## Error Handling
 
@@ -168,8 +171,8 @@ s.object({
 ```typescript
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') })  // Extract text
   .as('html')
   .processHTML({ html: A99.args('html') })
   .as('processed')
@@ -217,11 +220,12 @@ const logic = b
 
 This project defines these custom atoms:
 
+- `extractResponseText` - Extract text from HTTP Response objects
 - `htmlExtractText` - Extract text from HTML
 - `extractImagesFromHTML` - Extract image info
 - `filterCandidateImages` - Filter by size
 - `processCandidateImages` - Fetch and score in parallel
-- `scoreImageInterestingness` - Score with LLM vision
+- `scoreImageInterestingness` - Score with LLM vision (atom version)
 - `fetchImageData` - Fetch image with base64
 - `buildUserPrompt` - Build LLM prompts
 - `llmPredictBatteryLongTimeout` - LLM with long timeout

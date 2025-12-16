@@ -93,12 +93,13 @@ const vm = createVM()
 const b = vm.A99
 
 const logic = b
-  // Step 1: Initial operation
+  // Step 1: Initial operation - fetch webpage
   .httpFetch({ url: A99.args('url') })
-  .as('response')  // Alias for later reference
+  .as('httpResult')  // Alias for later reference
   
-  // Step 2: Transform data
-  .varGet({ key: 'response.text' })
+  // Step 2: Extract text from Response object
+  // Note: httpFetch returns Response object, must extract text with atom
+  .extractResponseText({ response: A99.args('httpResult') })
   .as('html')
   
   // Step 3: Process with custom atom
@@ -229,8 +230,8 @@ function createVM() {
 ```typescript
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') })  // Extract text from Response
   .as('html')
   .myCustomAtom({              // Use custom atom
     input: A99.args('html'),
@@ -360,8 +361,8 @@ const myAtom = defineAtom(
 ```typescript
 const logic = b
   .httpFetch({ url: A99.args('url') })
-  .as('response')
-  .varGet({ key: 'response.text' })
+  .as('httpResult')
+  .extractResponseText({ response: A99.args('httpResult') })  // Extract text from Response
   .as('html')
   .processHTML({ html: A99.args('html') })
   .as('processed')
@@ -516,10 +517,12 @@ const logic = b
 See the following files for complete examples:
 
 - **`src/index.ts`**: 
-  - `generateAltText()` - Complete page alt-text pipeline
+  - `generateAltText()` - Complete page alt-text pipeline (uses `extractResponseText` atom)
   - `generateImageAltText()` - Image processing pipeline
   - `generateCombinedAltText()` - Combined page and image pipeline
-  - Custom atom definitions (lines 1184-1620)
+  - Custom atom definitions including `extractResponseText`, `htmlExtractText`, `buildUserPrompt`, etc.
 
 - **Test file**: `src/example.test.ts` - Examples of using the functions
+
+**Important**: Always use `extractResponseText` atom after `httpFetch` to properly extract text from Response objects.
 
