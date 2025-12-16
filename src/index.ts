@@ -19,6 +19,7 @@ interface ImageInfo {
   alt?: string
   size?: number // File size in bytes
   area?: number // width * height for comparison
+  source?: string // Where the image was found: 'img', 'picture', 'css-background', 'data-bg'
 }
 
 /**
@@ -248,7 +249,94 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
     }
   }
   
+  // Extract CSS background images from inline styles
+  // Matches: style="background-image: url(...)" or style="background: url(...)"
+  const bgImageCount = extractCSSBackgroundImages(html, baseUrl, images)
+  if (bgImageCount > 0) {
+    console.log(`extractImagesFromHTML: Found ${bgImageCount} CSS background images`)
+  }
+  
   return images
+}
+
+/**
+ * Extracts CSS background images from inline styles in HTML
+ * Handles both background-image and background shorthand properties
+ */
+function extractCSSBackgroundImages(html: string, baseUrl: string, images: ImageInfo[]): number {
+  let count = 0
+  
+  // Match any element with a style attribute containing background-image or background with url()
+  // This handles: style="background-image: url(...)" and style="background: url(...)"
+  const styleRegex = /style\s*=\s*["']([^"']*(?:background(?:-image)?)\s*:[^"']*url\s*\([^)]+\)[^"']*)["']/gi
+  const styleMatches = Array.from(html.matchAll(styleRegex))
+  
+  for (const match of styleMatches) {
+    const styleContent = match[1]
+    
+    // Extract all url() values from the style
+    const urlRegex = /url\s*\(\s*["']?([^"')]+)["']?\s*\)/gi
+    const urlMatches = Array.from(styleContent.matchAll(urlRegex))
+    
+    for (const urlMatch of urlMatches) {
+      let src = urlMatch[1].trim()
+      
+      // Skip data URIs that are too small (gradients, small icons)
+      if (src.startsWith('data:')) {
+        if (src.length < 1000) continue
+      }
+      
+      // Skip CSS gradients (linear-gradient, radial-gradient, etc.)
+      if (src.includes('gradient')) continue
+      
+      // Decode HTML entities
+      src = src.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+      
+      const absoluteUrl = resolveUrl(src, baseUrl)
+      
+      // Check if we already have this image
+      if (images.some(img => img.url === absoluteUrl)) continue
+      
+      images.push({
+        url: absoluteUrl,
+        width: undefined,
+        height: undefined,
+        alt: undefined, // CSS backgrounds don't have alt text
+        area: undefined,
+        source: 'css-background', // Mark source for debugging
+      })
+      count++
+      
+      console.debug(`extractCSSBackgroundImages: Found background image: ${absoluteUrl.substring(0, 80)}...`)
+    }
+  }
+  
+  // Also look for data-bg attributes (common lazy loading pattern)
+  const dataBgRegex = /data-bg\s*=\s*["']([^"']+)["']/gi
+  const dataBgMatches = Array.from(html.matchAll(dataBgRegex))
+  
+  for (const match of dataBgMatches) {
+    let src = match[1].trim()
+    
+    if (src.startsWith('data:') && src.length < 1000) continue
+    
+    src = src.replace(/&amp;/g, '&')
+    const absoluteUrl = resolveUrl(src, baseUrl)
+    
+    if (images.some(img => img.url === absoluteUrl)) continue
+    
+    images.push({
+      url: absoluteUrl,
+      width: undefined,
+      height: undefined,
+      alt: undefined,
+      area: undefined,
+      source: 'data-bg',
+    })
+    count++
+  }
+  
+  return count
 }
 
 /**
@@ -683,7 +771,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   let pipelineResult
   let pageAltText: string | undefined
   let pageTopic: string | undefined
-  let fuelUsed: number | undefined
+  let fuelUsed = 0 // Accumulate fuel from all VM runs
   
   try {
     pipelineResult = await vm.run(
@@ -695,7 +783,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
       }
     )
     
-    fuelUsed = pipelineResult?.fuelUsed
+    fuelUsed += pipelineResult?.fuelUsed || 0
     pageAltText = pipelineResult?.result?.pageAltText
     pageTopic = pipelineResult?.result?.pageTopic
     const images = pipelineResult?.result?.images || []
@@ -735,7 +823,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
     console.error('VM error stack:', vmError.stack)
     pageAltText = undefined
     pageTopic = undefined
-    fuelUsed = undefined
+    // Keep fuelUsed as accumulated (don't reset it)
   }
   
   // Step 5: Process images using VM pipeline (if images found)
@@ -798,6 +886,9 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
             capabilities: capabilitiesWithFetch,
           }
         )
+        
+        // Accumulate fuel from image processing pipeline
+        fuelUsed += imagePipelineResult?.fuelUsed || 0
         
         const scoredCandidates = imagePipelineResult?.result?.candidates || []
         console.log('Image pipeline result:', JSON.stringify(imagePipelineResult?.result || {}).substring(0, 500))
@@ -909,6 +1000,9 @@ Please analyze the image and provide a JSON response with:
                   capabilities: customCapabilities,
                 }
               )
+              
+              // Accumulate fuel from alt-text generation pipeline
+              fuelUsed += altTextResult?.fuelUsed || 0
               
               imageAltText = altTextResult?.result?.altText
               imageDescription = altTextResult?.result?.description
@@ -1413,11 +1507,22 @@ const extractResponseText = defineAtom(
   s.object({ response: s.any }), // Accept response object as parameter
   s.string,
   async ({ response }: { response: any }, ctx: any) => {
-    // Handle argument references - resolve from state
+    // Debug: Log what we received and context state
+    console.log('extractResponseText: Input response type:', typeof response)
+    console.log('extractResponseText: Context state keys:', Object.keys(ctx.state || {}))
+    console.log('extractResponseText: Context vars keys:', Object.keys(ctx.vars || {}))
+    
+    // Handle argument references - resolve from state/vars/args
     let actualResponse = response
     if (response && typeof response === 'object' && '$kind' in response && response.$kind === 'arg') {
-      console.log('extractResponseText: Got argument reference, resolving from state. Path:', response.path)
-      actualResponse = ctx.state?.[response.path] || ctx.vars?.[response.path]
+      const path = response.path
+      console.log('extractResponseText: Got argument reference, resolving. Path:', path)
+      // Try args first (for direct function arguments), then state (for .as() results), then vars
+      actualResponse = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path]
+      console.log('extractResponseText: Resolved from:', 
+        ctx.args?.[path] !== undefined ? 'args' : 
+        ctx.state?.[path] !== undefined ? 'state' : 
+        ctx.vars?.[path] !== undefined ? 'vars' : 'none')
       console.log('extractResponseText: Resolved response type:', typeof actualResponse)
     }
     
@@ -1429,9 +1534,14 @@ const extractResponseText = defineAtom(
       // Check if it's a Response object with .text() method
       if ('text' in actualResponse && typeof actualResponse.text === 'function') {
         console.log('extractResponseText: Found Response object with .text() method, calling it')
-        const text = await actualResponse.text()
-        console.log(`extractResponseText: Got text from Response, length: ${text.length} chars`)
-        return text
+        try {
+          const text = await actualResponse.text()
+          console.log(`extractResponseText: Got text from Response, length: ${text.length} chars`)
+          return text
+        } catch (e: any) {
+          console.error('extractResponseText: Error calling .text():', e.message)
+          return ''
+        }
       } else if ('text' in actualResponse && typeof actualResponse.text === 'string') {
         console.log(`extractResponseText: Extracted text property, length: ${actualResponse.text.length} chars`)
         return actualResponse.text
@@ -1444,10 +1554,14 @@ const extractResponseText = defineAtom(
       } else {
         console.warn('extractResponseText: Response object has no extractable text property')
         console.warn('extractResponseText: Response keys:', Object.keys(actualResponse || {}))
+        // Try to stringify and see what we have
+        try {
+          console.warn('extractResponseText: Response sample:', JSON.stringify(actualResponse).substring(0, 500))
+        } catch { /* ignore */ }
         return ''
       }
     }
-    console.warn('extractResponseText: Invalid response type:', typeof actualResponse)
+    console.warn('extractResponseText: Invalid response type:', typeof actualResponse, 'value:', actualResponse)
     return ''
   },
   { docs: 'Extract text content from HTTP response object (handles Response objects and strings)', cost: 1 }
@@ -1462,51 +1576,62 @@ const htmlExtractText = defineAtom(
   s.object({ html: s.string }),
   s.string,
   async ({ html }: { html: string }, ctx: any) => {
-    // Debug: Log HTML input
-    console.log('htmlExtractText: Received HTML type:', typeof html)
+    // Debug: Log HTML input and context
+    console.log('htmlExtractText: Input html type:', typeof html)
+    console.log('htmlExtractText: Context state keys:', Object.keys(ctx.state || {}))
+    console.log('htmlExtractText: Context vars keys:', Object.keys(ctx.vars || {}))
     
-    // Handle argument references - resolve from state
-    let actualHtml = html
-    if (html && typeof html === 'object' && '$kind' in html && html.$kind === 'arg') {
-      console.log('htmlExtractText: Got argument reference, resolving from state. Path:', html.path)
-      actualHtml = ctx.state?.[html.path] || ctx.vars?.[html.path]
-      console.log('htmlExtractText: Resolved HTML type:', typeof actualHtml)
-      // Note: HTML should already be extracted text at this point (via extractResponseText)
-      // But handle Response objects just in case
-      if (actualHtml && typeof actualHtml === 'object') {
-        console.log('htmlExtractText: Resolved HTML is object, keys:', Object.keys(actualHtml))
-        // If it's a Response object, this is an error - should have been extracted earlier
-        if ('text' in actualHtml && typeof actualHtml.text === 'function') {
-          console.error('htmlExtractText: ERROR - Found Response object! This should have been extracted by extractResponseText atom')
-          // Don't call .text() here as it may have already been consumed
-          return ''
-        } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
-          console.log('htmlExtractText: Found .text property, using it')
-          actualHtml = actualHtml.text
-        }
-      } else if (typeof actualHtml === 'string') {
-        console.log('htmlExtractText: Resolved HTML is string, length:', actualHtml.length)
+    // Handle argument references - resolve from args/state/vars
+    let actualHtml: any = html
+    if (html && typeof html === 'object' && '$kind' in html && (html as any).$kind === 'arg') {
+      const path = (html as any).path
+      console.log('htmlExtractText: Got argument reference, resolving. Path:', path)
+      // Try args first, then state (for .as() results), then vars
+      actualHtml = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path]
+      console.log('htmlExtractText: Resolved from:', 
+        ctx.args?.[path] !== undefined ? 'args' : 
+        ctx.state?.[path] !== undefined ? 'state' : 
+        ctx.vars?.[path] !== undefined ? 'vars' : 'none')
+      console.log('htmlExtractText: Resolved HTML type:', typeof actualHtml,
+        typeof actualHtml === 'string' ? `length: ${actualHtml.length}` : '')
+    }
+    
+    // Handle Response objects that weren't properly extracted
+    if (actualHtml && typeof actualHtml === 'object') {
+      console.log('htmlExtractText: Resolved HTML is object, keys:', Object.keys(actualHtml))
+      if ('text' in actualHtml && typeof actualHtml.text === 'function') {
+        console.error('htmlExtractText: ERROR - Found Response object! Should have been extracted by extractResponseText')
+        return ''
+      } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
+        actualHtml = actualHtml.text
+      }
+    }
+    
+    // Fallback: try to get from context directly
+    if (!actualHtml || (typeof actualHtml === 'string' && actualHtml.length === 0)) {
+      console.log('htmlExtractText: Trying fallback from context...')
+      const fallback = ctx.state?.html ?? ctx.vars?.html ?? ctx.state?.htmlValue ?? ctx.vars?.htmlValue
+      if (typeof fallback === 'string' && fallback.length > 0) {
+        actualHtml = fallback
+        console.log('htmlExtractText: Got HTML from fallback, length:', actualHtml.length)
       }
     }
     
     if (!actualHtml) {
-      console.warn('htmlExtractText: Received null/undefined HTML')
-      // Try to get from context if not provided directly
-      const htmlFromContext = ctx.vars?.html || ctx.state?.html
-      if (htmlFromContext) {
-        console.log('htmlExtractText: Found HTML in context, length:', htmlFromContext.length)
-        return extractTextFromHTML(String(htmlFromContext))
-      }
+      console.warn('htmlExtractText: No HTML content after all resolution attempts')
       return ''
     }
+    
     if (typeof actualHtml !== 'string') {
       console.warn('htmlExtractText: HTML is not a string, converting. Type:', typeof actualHtml)
       actualHtml = String(actualHtml)
     }
+    
     if (actualHtml.length === 0) {
       console.warn('htmlExtractText: Received empty HTML string')
       return ''
     }
+    
     console.log(`htmlExtractText: Processing HTML, length: ${actualHtml.length} chars`)
     return extractTextFromHTML(actualHtml)
   },
@@ -1529,69 +1654,77 @@ const extractImagesFromHTMLAtom = defineAtom(
     size: s.any,
   })),
   async ({ html, baseUrl }: { html: string; baseUrl: string }, ctx: any) => {
-    // Ensure html is a string - handle cases where it might be an object or undefined
-    let htmlString: string
+    // Debug: Log context state
+    console.log('extractImagesFromHTMLAtom: Input html type:', typeof html)
+    console.log('extractImagesFromHTMLAtom: Context state keys:', Object.keys(ctx.state || {}))
+    console.log('extractImagesFromHTMLAtom: Context vars keys:', Object.keys(ctx.vars || {}))
     
-    // Handle argument references - resolve from state
-    let actualHtml = html
+    // Ensure html is a string - handle cases where it might be an object or undefined
+    let htmlString: string = ''
+    
+    // Handle argument references - resolve from args/state/vars
+    let actualHtml: any = html
     if (html && typeof html === 'object' && html !== null && '$kind' in html && html.$kind === 'arg') {
-      console.log('extractImagesFromHTMLAtom: Got argument reference, resolving from state. Path:', html.path)
-      actualHtml = ctx.state?.[html.path] || ctx.vars?.[html.path]
-      console.log('extractImagesFromHTMLAtom: Resolved HTML type:', typeof actualHtml)
-      // Note: HTML should already be extracted text at this point (via extractResponseText)
-      // But handle Response objects just in case
-      if (actualHtml && typeof actualHtml === 'object') {
-        console.log('extractImagesFromHTMLAtom: Resolved HTML is object, keys:', Object.keys(actualHtml))
-        // If it's a Response object, this is an error - should have been extracted earlier
-        if ('text' in actualHtml && typeof actualHtml.text === 'function') {
-          console.error('extractImagesFromHTMLAtom: ERROR - Found Response object! This should have been extracted by extractResponseText atom')
-          // Don't call .text() here as it may have already been consumed
-          return []
-        } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
-          console.log('extractImagesFromHTMLAtom: Found .text property, using it')
-          actualHtml = actualHtml.text
-        }
-      } else if (typeof actualHtml === 'string') {
-        console.log('extractImagesFromHTMLAtom: Resolved HTML is string, length:', actualHtml.length)
-      }
+      const path = (html as any).path
+      console.log('extractImagesFromHTMLAtom: Got argument reference, resolving. Path:', path)
+      // Try args first, then state (for .as() results), then vars
+      actualHtml = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path]
+      console.log('extractImagesFromHTMLAtom: Resolved from:', 
+        ctx.args?.[path] !== undefined ? 'args' : 
+        ctx.state?.[path] !== undefined ? 'state' : 
+        ctx.vars?.[path] !== undefined ? 'vars' : 'none')
+      console.log('extractImagesFromHTMLAtom: Resolved HTML type:', typeof actualHtml, 
+        typeof actualHtml === 'string' ? `length: ${actualHtml.length}` : '')
     }
     
-    // First try the direct parameter
+    // If we have a string, use it directly
     if (typeof actualHtml === 'string' && actualHtml.length > 0) {
       htmlString = actualHtml
-    } else if (actualHtml && typeof actualHtml === 'object' && actualHtml !== null) {
-      // Try to extract from object
-      if ('text' in html && typeof (html as any).text === 'string') {
-        htmlString = String((html as any).text)
-      } else if ('content' in html && typeof (html as any).content === 'string') {
-        htmlString = String((html as any).content)
-      } else if ('html' in html && typeof (html as any).html === 'string') {
-        htmlString = String((html as any).html)
-      } else {
-        // Try to get from variable store as fallback
-        htmlString = String(ctx.state?.html || ctx.vars?.html || ctx.vars?.['response.text'] || '')
+      console.log('extractImagesFromHTMLAtom: Using resolved string, length:', htmlString.length)
+    } else if (actualHtml && typeof actualHtml === 'object') {
+      // Handle Response objects or objects with text property
+      console.log('extractImagesFromHTMLAtom: Resolved HTML is object, keys:', Object.keys(actualHtml))
+      if ('text' in actualHtml && typeof actualHtml.text === 'function') {
+        console.error('extractImagesFromHTMLAtom: ERROR - Found Response object! Should have been extracted by extractResponseText')
+        return []
+      } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
+        htmlString = actualHtml.text
+      } else if ('content' in actualHtml && typeof actualHtml.content === 'string') {
+        htmlString = actualHtml.content
       }
-    } else {
-      // Try to get from variable store as fallback
-      htmlString = String(ctx.state?.html || ctx.vars?.html || ctx.vars?.['response.text'] || actualHtml || '')
     }
     
-    // Ensure baseUrl is a string
-    let baseUrlString: string
+    // Fallback: try to get from context directly
+    if (!htmlString || htmlString.length === 0) {
+      console.log('extractImagesFromHTMLAtom: Trying fallback from context...')
+      const fallback = ctx.state?.html ?? ctx.vars?.html ?? ctx.state?.htmlValue ?? ctx.vars?.htmlValue
+      if (typeof fallback === 'string' && fallback.length > 0) {
+        htmlString = fallback
+        console.log('extractImagesFromHTMLAtom: Got HTML from fallback, length:', htmlString.length)
+      }
+    }
+    
+    // Resolve baseUrl similarly
+    let baseUrlString: string = ''
     if (typeof baseUrl === 'string' && baseUrl.length > 0) {
       baseUrlString = baseUrl
-    } else if (baseUrl && typeof baseUrl === 'object' && baseUrl !== null && 'url' in baseUrl) {
-      baseUrlString = String((baseUrl as any).url)
-    } else {
-      baseUrlString = String(ctx.vars?.url || baseUrl || '')
+    } else if (baseUrl && typeof baseUrl === 'object' && '$kind' in baseUrl && baseUrl.$kind === 'arg') {
+      const path = (baseUrl as any).path
+      baseUrlString = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path] ?? ''
+    }
+    if (!baseUrlString) {
+      baseUrlString = ctx.args?.url ?? ctx.state?.url ?? ctx.vars?.url ?? ''
     }
     
     // Final validation
     if (!htmlString || htmlString.length === 0) {
-      console.warn('extractImagesFromHTMLAtom: No HTML content provided')
+      console.warn('extractImagesFromHTMLAtom: No HTML content provided after all resolution attempts')
+      console.warn('extractImagesFromHTMLAtom: Available state:', JSON.stringify(Object.keys(ctx.state || {})))
+      console.warn('extractImagesFromHTMLAtom: Available vars:', JSON.stringify(Object.keys(ctx.vars || {})))
       return []
     }
     
+    console.log(`extractImagesFromHTMLAtom: Processing HTML, length: ${htmlString.length}, baseUrl: ${baseUrlString}`)
     return extractImagesFromHTML(htmlString, baseUrlString)
   },
   { docs: 'Extract image information from HTML string', cost: 5 }

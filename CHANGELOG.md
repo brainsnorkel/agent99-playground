@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Fixed (2025-12-17) - Fuel Calculation Bug
+- **Fuel used was always showing the same value**: The `processUrl()` function runs 3 VM pipelines (page analysis, image processing, alt-text generation), but only the first pipeline's fuel was being captured
+- Now accumulates fuel from all VM runs:
+  - Page analysis pipeline fuel
+  - Image processing pipeline fuel  
+  - Alt-text generation pipeline fuel
+- Initialized `fuelUsed` to 0 and use `+=` to accumulate instead of `=` assignment
+- Removed `fuelUsed = undefined` reset in error handler to preserve accumulated fuel
+
+### Added (2025-12-17) - URL Scheme Normalization
+- **Auto-prepend `https://`**: URLs without a scheme (e.g., `example.com`) now automatically get `https://` prepended
+- Implemented in both frontend (`src/index.html`) and server (`src/server.ts`) for redundancy
+- Users can now enter URLs like `google.com` without typing the full `https://google.com`
+
 ### Changed (2025-12-17) - Relax Image Size Requirements
 - **`filterCandidateImages()`**: Relaxed minimum image size from 100x100 to 10x10
   - Images must now be larger than 10x10 pixels (area > 100) to be considered

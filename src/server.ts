@@ -79,6 +79,11 @@ serve({
           )
         }
 
+        // Add https:// if no scheme is provided
+        const normalizedUrl = /^https?:\/\//i.test(targetUrl)
+          ? targetUrl
+          : `https://${targetUrl}`
+
         // Use provided LLM URL or default
         const effectiveLLMUrl = llmUrl || defaultLLMUrl
         const finalLLMUrl = effectiveLLMUrl.endsWith('/v1')
@@ -86,10 +91,10 @@ serve({
           : `${effectiveLLMUrl}/v1`
 
         // Process the URL: generate both page and image alt-text
-        console.log(`Processing URL: ${targetUrl} with LLM: ${finalLLMUrl}`)
+        console.log(`Processing URL: ${normalizedUrl} with LLM: ${finalLLMUrl}`)
         let result
         try {
-          result = await generateCombinedAltText(targetUrl, finalLLMUrl)
+          result = await generateCombinedAltText(normalizedUrl, finalLLMUrl)
           console.log(`Processing complete. Result:`, {
             url: result.url,
             pageAltText: result.pageAltText,
@@ -105,7 +110,7 @@ serve({
           console.error('Error stack:', genError.stack)
           // Return a partial result instead of throwing
           result = {
-            url: targetUrl,
+            url: normalizedUrl,
             pageAltText: `Error: ${genError.message}`,
             pageTopic: 'Error occurred',
             fuelUsed: undefined,
