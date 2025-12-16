@@ -8,6 +8,7 @@ import {
   defineAtom,
 } from 'agent-99'
 import { s } from 'tosijs-schema'
+import { DEFAULT_LLM_URL } from './config'
 
 /**
  * Represents an image found on a webpage
@@ -468,7 +469,7 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
@@ -755,7 +756,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
@@ -2395,7 +2396,7 @@ export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) 
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   
   // Create capabilities with vision support
@@ -2453,7 +2454,7 @@ export async function generateAltText(url: string, llmBaseUrl?: string) {
     // Fetch the webpage using httpFetch atom (capability-based security)
     .httpFetch({ url: A99.args('url') })
     .as('response')
-    .varGet({ key: 'response.text' })
+    .extractResponseText({ response: A99.args('response') })
     .as('html')
     // Extract text from HTML using custom atom
     .htmlExtractText({ html: A99.args('html') })
@@ -2467,42 +2468,18 @@ export async function generateAltText(url: string, llmBaseUrl?: string) {
     .as('userPrompt')
     // Store userPrompt in variable store for LLM call
     .varSet({ key: 'userPrompt', value: 'userPrompt' })
-    // Get userPrompt from variable store to pass to LLM
-    .varGet({ key: 'userPrompt' })
-    .as('userPromptValue')
-    // Use LLM to generate alt-text from the extracted page content
-    .llmPredictBattery({
-      system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
-The alt-text should:
-- Be 50-150 characters long
-- Describe the main topic or purpose of the page
-- Be clear and informative
-- Avoid redundant phrases like "link to" or "page about"
-- Focus on what the user would find on the page
-
-You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
-      user: A99.args('userPromptValue'),
-      responseFormat: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'alt_text_result',
-          schema: {
-            type: 'object',
-            properties: {
-              altText: {
-                type: 'string',
-                description: 'The alt-text suitable for a link to this page (50-150 characters)',
-              },
-              topic: {
-                type: 'string',
-                description: 'Brief description of the page topic',
-              },
-            },
-            required: ['altText', 'topic'],
-          },
-        },
-      },
-    })
+          .llmPredictBattery({
+                  system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
+            The alt-text should:
+            - Be 50-150 characters long
+            - Describe the main topic or purpose of the page
+            - Be clear and informative
+            - Avoid redundant phrases like "link to" or "page about"
+            - Focus on what the user would find on the page
+            
+            You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
+                  user: A99.args('userPromptValue'),
+                  responseFormat: {        type: 'json_schema',        json_schema: {          name: 'alt_text_result',          schema: {            type: 'object',            properties: {              altText: {                type: 'string',                description: 'The alt-text suitable for a link to this page (50-150 characters)',              },              topic: {                type: 'string',                description: 'Brief description of the page topic',              },            },            required: ['altText', 'topic'],          },        },      },    })
     .as('summary')
     .varGet({ key: 'summary.content' })
     .as('jsonContent')
@@ -2576,7 +2553,7 @@ async function main() {
   const mode = process.argv[2]
   const url = process.argv[3]
   // Default to custom LLM URL, ensure it has /v1 suffix for LM Studio compatibility
-  const llmBaseUrl = process.env.LLM_URL || 'http://192.168.1.61:1234'
+  const llmBaseUrl = process.env.LLM_URL || DEFAULT_LLM_URL
   const llmUrl = llmBaseUrl.endsWith('/v1') ? llmBaseUrl : `${llmBaseUrl}/v1`
 
   // Support both: "bun run src/index.ts <url>" and "bun run src/index.ts --image <url>"

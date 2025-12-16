@@ -1,4 +1,5 @@
 import { serve } from 'bun'
+import { DEFAULT_LLM_URL } from './config'
 import { generateCombinedAltText } from './index'
 
 interface QueryResult {
@@ -20,7 +21,7 @@ interface QueryResult {
 
 // In-memory storage (in production, use a database)
 const queryHistory: QueryResult[] = []
-const defaultLLMUrl = 'http://192.168.1.61:1234/v1'
+const defaultLLMUrl = DEFAULT_LLM_URL
 
 // CORS headers
 const corsHeaders = {

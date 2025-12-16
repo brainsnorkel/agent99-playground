@@ -433,10 +433,12 @@ const logic = b
 
 ### LLM Setup
 
-The web app allows you to configure the LLM endpoint directly in the UI:
+The default LLM URL is now centralized in `src/config.ts`. You can override it by setting the `LLM_URL` environment variable.
+
+The web app also allows you to configure the LLM endpoint directly in the UI:
 
 1. Click the "LLM Settings" panel to expand it
-2. Enter your LLM base URL (e.g., `http://localhost:1234/v1` or `http://192.168.1.61:1234/v1`)
+2. Enter your LLM base URL (e.g., `http://localhost:1234/v1`)
 3. The `/v1` suffix is automatically added if not present
 4. Settings are saved to browser localStorage
 
@@ -447,9 +449,7 @@ The web app allows you to configure the LLM endpoint directly in the UI:
 3. **Load the Model** - Select model in Chat tab
 4. **Start Local Server** - Click "Local Server" tab and start server (default: `http://localhost:1234`)
 5. **Verify Server** - Navigate to `http://localhost:1234/v1/models` in browser
-6. **Configure in App** - Enter URL in settings panel
-
-**Default LLM URL:** `http://192.168.1.61:1234/v1` (can be changed in web app settings)
+6. **Configure in App** - Enter the URL in the settings panel or leave it blank to use the default.
 
 ## Project Structure
 
