@@ -99,9 +99,9 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
     
     const absoluteUrl = resolveUrl(src, baseUrl)
     
-    // Extract width and height attributes
-    const widthMatch = imgTag.match(/width=["']?(\d+)["']?/i)
-    const heightMatch = imgTag.match(/height=["']?(\d+)["']?/i)
+    // Extract width and height attributes (handle formats like "400", "400px", width="400", etc.)
+    const widthMatch = imgTag.match(/width\s*=\s*["']?(\d+)/i)
+    const heightMatch = imgTag.match(/height\s*=\s*["']?(\d+)/i)
     const altMatch = imgTag.match(/alt=["']([^"']*)["']/i)
     
     // Also check for srcset to get larger image sizes
@@ -180,8 +180,8 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
         }
       }
       
-      const widthMatch = imgTag.match(/width=["']?(\d+)["']?/i)
-      const heightMatch = imgTag.match(/height=["']?(\d+)["']?/i)
+      const widthMatch = imgTag.match(/width\s*=\s*["']?(\d+)/i)
+      const heightMatch = imgTag.match(/height\s*=\s*["']?(\d+)/i)
       const altMatch = imgTag.match(/alt=["']([^"']*)["']/i)
       
       const width = widthMatch ? parseInt(widthMatch[1], 10) : undefined
@@ -413,29 +413,244 @@ Please analyze the image and provide a JSON response with:
 
 /**
  * Generates both page and image alt-text in a single operation
- * First generates page alt-text, then uses that context to generate image alt-text
+ * Fetches the page once, extracts images and text, then generates both alt-texts
+ * This ensures we work with the same HTML and is more efficient
  */
 export async function generateCombinedAltText(url: string, llmBaseUrl?: string) {
-  // First, generate page alt-text
-  const pageResult = await generateAltText(url, llmBaseUrl)
+  // Step 1: Fetch the webpage once
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`)
+  }
+  const html = await response.text()
   
-  // Then, generate image alt-text using page context
-  let imageResult
-  try {
-    imageResult = await generateImageAltText(url, llmBaseUrl, {
-      altText: pageResult.altText,
-      topic: pageResult.topic,
+  // Step 2: Extract images from HTML
+  const images = extractImagesFromHTML(html, url)
+  console.log(`Found ${images.length} image(s) on the page`)
+  if (images.length > 0) {
+    console.log('Image URLs found:', images.map(img => ({ url: img.url, width: img.width, height: img.height, area: img.area })))
+  }
+  
+  // Step 3: Extract text content for page alt-text generation
+  const pageText = extractTextFromHTML(html)
+  
+  // Step 4: Generate page alt-text and topic using LLM
+  const vm = createVM()
+  const b = vm.A99
+  
+  const pageLogic = b
+    .llmPredictBattery({
+      system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
+The alt-text should:
+- Be 50-150 characters long
+- Describe the main topic or purpose of the page
+- Be clear and informative
+- Avoid redundant phrases like "link to" or "page about"
+- Focus on what the user would find on the page
+
+You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
+      user: `Generate alt-text for a link to this webpage: ${url}
+
+Here is the extracted text content from the webpage:
+
+${pageText.substring(0, 3000)}
+
+Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`,
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'alt_text_result',
+          schema: {
+            type: 'object',
+            properties: {
+              altText: {
+                type: 'string',
+                description: 'The alt-text suitable for a link to this page (50-150 characters)',
+              },
+              topic: {
+                type: 'string',
+                description: 'Brief description of the page topic',
+              },
+            },
+            required: ['altText', 'topic'],
+          },
+        },
+      },
     })
-  } catch (error: any) {
-    // If image processing fails (e.g., no images found), continue without image data
-    console.warn('Image processing failed:', error.message)
-    imageResult = null
+    .as('summary')
+    .varGet({ key: 'summary.content' })
+    .as('jsonContent')
+    .jsonParse({ str: 'jsonContent' })
+    .as('parsed')
+    .varSet({ key: 'altText', value: 'parsed.altText' })
+    .varSet({ key: 'topic', value: 'parsed.topic' })
+    .return(
+      s.object({
+        altText: s.string,
+        topic: s.string,
+      })
+    )
+  
+  const pageAst = pageLogic.toJSON()
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
+  const customCapabilities = finalLlmUrl 
+    ? createCustomCapabilities(finalLlmUrl)
+    : batteries
+  
+  const pageResult = await vm.run(
+    pageAst,
+    {},
+    {
+      fuel: 10000,
+      capabilities: customCapabilities,
+    }
+  )
+  
+  // Parse page result
+  let pageAltText = pageResult.result?.altText
+  let pageTopic = pageResult.result?.topic
+  
+  if (!pageAltText && pageResult.result?.summary?.content) {
+    try {
+      const parsed = JSON.parse(pageResult.result.summary.content)
+      pageAltText = parsed.altText
+      pageTopic = parsed.topic
+    } catch {
+      pageAltText = pageResult.result.summary.content
+    }
+  }
+  
+  // Step 5: Find largest image and generate image alt-text (if images found)
+  let imageResult = null
+  if (images.length > 0) {
+    try {
+      // Find the largest image
+      let largestImage: ImageInfo | null = null
+      let maxArea = 0
+      let maxSize = 0
+      
+      // First, try to find by area (dimensions)
+      for (const img of images) {
+        if (img.area && img.area > maxArea) {
+          maxArea = img.area
+          largestImage = img
+        }
+      }
+      
+      // If no dimensions available, fetch images to get their file sizes
+      if (!largestImage || !largestImage.area) {
+        for (const img of images) {
+          try {
+            const imageData = await fetchImageData(img.url)
+            img.size = imageData.size
+            
+            if (imageData.size > maxSize) {
+              maxSize = imageData.size
+              largestImage = img
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch image ${img.url}:`, error)
+            // Continue with other images
+          }
+        }
+      }
+      
+      if (largestImage) {
+        console.log(`Selected largest image: ${largestImage.url} (${largestImage.width}x${largestImage.height || '?'}, area: ${largestImage.area || 'unknown'}, size: ${largestImage.size || 'unknown'} bytes)`)
+        // Fetch the largest image data
+        const imageData = await fetchImageData(largestImage.url)
+        
+        // Generate image alt-text using page context
+        const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
+
+The alt-text should:
+- Be 50-200 characters long
+- Accurately describe the main subject and important details in the image
+- Be clear and informative without being overly verbose
+- Avoid redundant phrases like "image of" or "picture showing"
+- Focus on what a visually impaired user would need to know
+- Include context when relevant (e.g., "Chart showing sales data from 2020-2024")
+
+Analyze the provided image carefully and generate appropriate alt-text. Return your response as JSON with "altText" and "description" fields.`
+
+        const userPrompt = `Generate alt-text for this image from the webpage: ${url}
+
+Image URL: ${largestImage.url}
+${largestImage.alt ? `Existing alt attribute: ${largestImage.alt}` : 'No existing alt attribute'}
+
+Page Context:
+- Page Topic: ${pageTopic || 'Unknown'}
+- Page Alt-Text: ${pageAltText || 'Unknown'}
+
+Use this page context to better understand the image's role and relevance on the page.
+
+Please analyze the image and provide a JSON response with:
+- "altText": A concise alt-text (50-200 characters) that considers the page context
+- "description": A more detailed description (optional)`
+
+        const responseFormat = {
+          type: 'json_schema',
+          json_schema: {
+            name: 'image_alt_text_result',
+            schema: {
+              type: 'object',
+              properties: {
+                altText: {
+                  type: 'string',
+                  description: 'The alt-text suitable for this image (50-200 characters)',
+                },
+                description: {
+                  type: 'string',
+                  description: 'A more detailed description of the image (optional, for context)',
+                },
+              },
+              required: ['altText'],
+            },
+          },
+        }
+        
+        const llmResponse = await predictWithVision(
+          finalLlmUrl,
+          systemPrompt,
+          userPrompt,
+          imageData.base64,
+          responseFormat
+        )
+        
+        // Parse the JSON response
+        let imageAltText: string | undefined
+        let imageDescription: string | undefined
+        
+        try {
+          const parsed = JSON.parse(llmResponse.content)
+          imageAltText = parsed.altText
+          imageDescription = parsed.description
+        } catch {
+          imageAltText = llmResponse.content
+        }
+        
+        imageResult = {
+          imageUrl: largestImage.url,
+          altText: imageAltText || largestImage.alt || 'Unable to generate alt-text',
+          description: imageDescription || undefined,
+          imageWidth: largestImage.width,
+          imageHeight: largestImage.height,
+          imageSize: imageData.size,
+        }
+      }
+    } catch (error: any) {
+      console.warn('Image processing failed:', error.message)
+      imageResult = null
+    }
+  } else {
+    console.log('No images found on the page')
   }
   
   return {
     url,
-    pageAltText: pageResult.altText,
-    pageTopic: pageResult.topic,
+    pageAltText: pageAltText || 'Unable to generate alt-text',
+    pageTopic: pageTopic || 'Unable to determine topic',
     fuelUsed: pageResult.fuelUsed,
     imageUrl: imageResult?.imageUrl,
     imageAltText: imageResult?.altText,
