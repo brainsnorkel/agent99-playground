@@ -1,0 +1,29 @@
+{
+  "name": "agent99-url-summarizer",
+  "version": "1.0.0",
+  "description": "Example project using agent-99 to scrape URLs and generate alt-text summaries",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "agent-99",
+    "web-scraping",
+    "llm",
+    "alt-text",
+    "accessibility"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "agent-99": "^0.0.1",
+    "tosijs-schema": "^1.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}
