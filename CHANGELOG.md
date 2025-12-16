@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Added (2025-12-17) - Better Errors for Sites That Block
+- **Descriptive error messages** for sites that can't be analyzed, with specific error types:
+  - `blocked` - Site blocks automated access (HTTP 401, 403, 429, 451)
+  - `not_found` - Page not found or gone (HTTP 404, 410)
+  - `dns_error` - Domain doesn't exist or can't be resolved
+  - `timeout` - Request timed out
+  - `connection_refused` - Server not accepting connections
+  - `ssl_error` - SSL/TLS certificate issues
+  - `http_error` - Other HTTP errors (5xx, etc.)
+- **FetchErrorInfo interface** exported from index.ts with:
+  - `errorType`: Categorized error type
+  - `errorCode`: HTTP status code (when applicable)
+  - `errorMessage`: Human-readable description
+  - `suggestion`: Actionable advice for the user
+- **Enhanced fetch wrapper** (`createFetchWithErrorInfo()`) that:
+  - Wraps all URL fetches with error classification
+  - Provides 30-second default timeout
+  - Detects and classifies network errors (ENOTFOUND, ECONNREFUSED, ETIMEDOUT, etc.)
+  - Detects and classifies HTTP errors (403 blocked, 404 not found, 429 rate limited, etc.)
+- **Web UI error display** with:
+  - Yellow warning styling for items with errors
+  - Error type badge (e.g., "DNS ERROR", "BLOCKED")
+  - HTTP status code display
+  - Descriptive message explaining why the site couldn't be analyzed
+  - Suggestion text to help users resolve the issue
+- **Examples of improved error messages**:
+  - `washingtonpost.com` → "Access forbidden by www.washingtonpost.com - This site blocks automated access."
+  - `flatamapit.com` → "Domain 'flatamapit.com' does not exist - Check if the URL is spelled correctly."
+
 ### Fixed (2025-12-17) - Documentation Accuracy Review
 - **README.md**: Added missing `fetchImageData` atom to Custom Atoms list (was listed in QUICK_REFERENCE.md but not README)
 - **TESTING.md**: Clarified alt-text length ranges (page: 50-150 chars, image: 50-200 chars)

@@ -1,6 +1,6 @@
 import { serve } from 'bun'
 import { DEFAULT_LLM_URL } from './config'
-import { generateCombinedAltText } from './index'
+import { generateCombinedAltText, FetchErrorInfo } from './index'
 
 interface QueryResult {
   id: string
@@ -17,6 +17,8 @@ interface QueryResult {
   imageWidth?: number
   imageHeight?: number
   imageSize?: number
+  // Error information for sites that couldn't be analyzed
+  error?: FetchErrorInfo
 }
 
 // In-memory storage (in production, use a database)
@@ -141,6 +143,7 @@ serve({
           imageWidth: result.imageWidth,
           imageHeight: result.imageHeight,
           imageSize: result.imageSize,
+          error: result.error,
         }
         
         console.log(`QueryResult created:`, {

@@ -829,6 +829,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   let pageAltText: string | undefined
   let pageTopic: string | undefined
   let fuelUsed = 0 // Accumulate fuel from all VM runs
+  let fetchError: FetchErrorInfo | undefined
   
   try {
     pipelineResult = await vm.run(
@@ -878,8 +879,24 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   } catch (vmError: any) {
     debugWarn('VM execution failed:', vmError.message)
     debugLog('VM error stack:', vmError.stack)
-    pageAltText = undefined
-    pageTopic = undefined
+    
+    // Check if this is a fetch error with detailed info
+    if (vmError.fetchErrorInfo) {
+      fetchError = vmError.fetchErrorInfo
+      pageAltText = `Site could not be analyzed: ${fetchError!.errorMessage}`
+      pageTopic = `Error: ${fetchError!.errorType}`
+    } else {
+      // Try to extract error info from the error message
+      const errorMsg = vmError.message || String(vmError)
+      if (errorMsg.includes('Site Analysis Failed:')) {
+        // Extract error type from message
+        pageAltText = errorMsg.split('\n')[0].replace('Site Analysis Failed: ', '')
+        pageTopic = 'Site access error'
+      } else {
+        pageAltText = undefined
+        pageTopic = undefined
+      }
+    }
     // Keep fuelUsed as accumulated (don't reset it)
   }
   
@@ -1109,6 +1126,7 @@ Please analyze the image and provide a JSON response with:
     imageWidth?: number
     imageHeight?: number
     imageSize?: number
+    error?: FetchErrorInfo
   } = {
     url,
     pageAltText: finalPageAltText,
@@ -1118,6 +1136,9 @@ Please analyze the image and provide a JSON response with:
   // Only add optional fields if they have values (to avoid undefined in JSON)
   if (fuelUsed !== undefined) {
     finalResult.fuelUsed = fuelUsed
+  }
+  if (fetchError) {
+    finalResult.error = fetchError
   }
   if (imageResult?.imageUrl) {
     finalResult.imageUrl = imageResult.imageUrl
@@ -1147,11 +1168,249 @@ Please analyze the image and provide a JSON response with:
 }
 
 /**
+ * Error information for sites that couldn't be analyzed
+ */
+export interface FetchErrorInfo {
+  errorType: 'blocked' | 'not_found' | 'dns_error' | 'timeout' | 'connection_refused' | 'ssl_error' | 'http_error' | 'unknown'
+  errorCode?: number
+  errorMessage: string
+  suggestion: string
+}
+
+/**
+ * Classifies fetch errors and returns descriptive error information
+ */
+function classifyFetchError(error: any, url: string): FetchErrorInfo {
+  const errorMessage = error?.message || String(error)
+  const errorCode = error?.cause?.code || error?.code
+  
+  // DNS resolution failures
+  if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+    const hostname = new URL(url).hostname
+    return {
+      errorType: 'dns_error',
+      errorMessage: `Domain '${hostname}' does not exist or cannot be resolved`,
+      suggestion: 'Check if the URL is spelled correctly. The domain may not exist or may have expired.',
+    }
+  }
+  
+  // Connection refused
+  if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
+    return {
+      errorType: 'connection_refused',
+      errorMessage: 'Connection refused by the server',
+      suggestion: 'The server may be down or not accepting connections.',
+    }
+  }
+  
+  // Timeout errors
+  if (errorCode === 'ETIMEDOUT' || errorCode === 'ESOCKETTIMEDOUT' || 
+      errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT') ||
+      error?.name === 'AbortError' || errorMessage.includes('aborted')) {
+    return {
+      errorType: 'timeout',
+      errorMessage: 'Request timed out',
+      suggestion: 'The server took too long to respond. It may be overloaded or the connection is slow.',
+    }
+  }
+  
+  // SSL/TLS errors
+  if (errorCode === 'CERT_HAS_EXPIRED' || errorCode === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+      errorMessage.includes('SSL') || errorMessage.includes('TLS') || errorMessage.includes('certificate')) {
+    return {
+      errorType: 'ssl_error',
+      errorMessage: 'SSL/TLS certificate error',
+      suggestion: 'The site has an invalid or expired SSL certificate.',
+    }
+  }
+  
+  // Connection reset
+  if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
+    return {
+      errorType: 'connection_refused',
+      errorMessage: 'Connection was reset by the server',
+      suggestion: 'The server unexpectedly closed the connection. It may be blocking automated requests.',
+    }
+  }
+  
+  // Generic fetch failures
+  if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
+    return {
+      errorType: 'unknown',
+      errorMessage: 'Network request failed',
+      suggestion: 'Check your network connection and verify the URL is accessible.',
+    }
+  }
+  
+  // Default unknown error
+  return {
+    errorType: 'unknown',
+    errorMessage: errorMessage.substring(0, 200),
+    suggestion: 'An unexpected error occurred. Check the URL and try again.',
+  }
+}
+
+/**
+ * Classifies HTTP response errors (non-2xx status codes)
+ */
+function classifyHttpError(response: Response, url: string): FetchErrorInfo {
+  const status = response.status
+  const hostname = new URL(url).hostname
+  
+  // Blocked/Forbidden responses
+  if (status === 403) {
+    return {
+      errorType: 'blocked',
+      errorCode: 403,
+      errorMessage: `Access forbidden by ${hostname}`,
+      suggestion: 'This site blocks automated access. It may have bot detection or require authentication.',
+    }
+  }
+  
+  // Unauthorized
+  if (status === 401) {
+    return {
+      errorType: 'blocked',
+      errorCode: 401,
+      errorMessage: `Authentication required for ${hostname}`,
+      suggestion: 'This site requires login or authentication to access.',
+    }
+  }
+  
+  // Legal/censorship blocks
+  if (status === 451) {
+    return {
+      errorType: 'blocked',
+      errorCode: 451,
+      errorMessage: `Content unavailable for legal reasons on ${hostname}`,
+      suggestion: 'This content is blocked for legal reasons in your region.',
+    }
+  }
+  
+  // Not found
+  if (status === 404) {
+    return {
+      errorType: 'not_found',
+      errorCode: 404,
+      errorMessage: `Page not found on ${hostname}`,
+      suggestion: 'The specific page does not exist. Check if the URL path is correct.',
+    }
+  }
+  
+  // Gone
+  if (status === 410) {
+    return {
+      errorType: 'not_found',
+      errorCode: 410,
+      errorMessage: `Page has been permanently removed from ${hostname}`,
+      suggestion: 'This content has been deleted and is no longer available.',
+    }
+  }
+  
+  // Rate limiting
+  if (status === 429) {
+    return {
+      errorType: 'blocked',
+      errorCode: 429,
+      errorMessage: `Rate limited by ${hostname}`,
+      suggestion: 'Too many requests. Wait a moment and try again.',
+    }
+  }
+  
+  // Server errors
+  if (status >= 500) {
+    return {
+      errorType: 'http_error',
+      errorCode: status,
+      errorMessage: `Server error (${status}) from ${hostname}`,
+      suggestion: 'The server is experiencing issues. Try again later.',
+    }
+  }
+  
+  // Other client errors
+  if (status >= 400) {
+    return {
+      errorType: 'http_error',
+      errorCode: status,
+      errorMessage: `HTTP error ${status} from ${hostname}`,
+      suggestion: 'The request could not be processed. Check the URL and try again.',
+    }
+  }
+  
+  // Redirect without following (shouldn't normally happen with fetch)
+  if (status >= 300) {
+    return {
+      errorType: 'http_error',
+      errorCode: status,
+      errorMessage: `Unexpected redirect (${status}) from ${hostname}`,
+      suggestion: 'The site returned a redirect that could not be followed.',
+    }
+  }
+  
+  return {
+    errorType: 'unknown',
+    errorCode: status,
+    errorMessage: `Unexpected HTTP status ${status}`,
+    suggestion: 'An unexpected response was received. Try again.',
+  }
+}
+
+/**
+ * Creates a fetch wrapper that provides descriptive error information
+ * for sites that block access or have connectivity issues
+ */
+function createFetchWithErrorInfo(baseFetch: typeof globalThis.fetch = fetch) {
+  return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+    
+    try {
+      const response = await baseFetch(input, {
+        ...init,
+        signal: init?.signal || AbortSignal.timeout(30000), // 30 second default timeout
+      })
+      
+      // Check for error HTTP status codes
+      if (!response.ok) {
+        const errorInfo = classifyHttpError(response, url)
+        const error = new Error(
+          `Site Analysis Failed: ${errorInfo.errorMessage}\n\n` +
+          `URL: ${url}\n` +
+          `HTTP Status: ${response.status} ${response.statusText}\n\n` +
+          `Reason: ${errorInfo.suggestion}`
+        ) as Error & { fetchErrorInfo: FetchErrorInfo }
+        error.fetchErrorInfo = errorInfo
+        throw error
+      }
+      
+      return response
+    } catch (error: any) {
+      // If we already classified it, re-throw
+      if (error.fetchErrorInfo) {
+        throw error
+      }
+      
+      // Classify the error
+      const errorInfo = classifyFetchError(error, url)
+      const enhancedError = new Error(
+        `Site Analysis Failed: ${errorInfo.errorMessage}\n\n` +
+        `URL: ${url}\n\n` +
+        `Reason: ${errorInfo.suggestion}`
+      ) as Error & { fetchErrorInfo: FetchErrorInfo }
+      enhancedError.fetchErrorInfo = errorInfo
+      throw enhancedError
+    }
+  }
+}
+
+/**
  * Creates custom capabilities with custom LLM URL
  */
 function createCustomCapabilities(llmBaseUrl: string) {
   // Start with standard batteries
   const customCaps = { ...batteries }
+  
+  // Add fetch wrapper with descriptive error messages
+  customCaps.fetch = createFetchWithErrorInfo()
   
   // Helper to get available model from LM Studio
   async function getAvailableModel(): Promise<string | null> {

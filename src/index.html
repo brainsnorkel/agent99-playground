@@ -243,6 +243,50 @@
       margin-top: 12px;
     }
 
+    .result-error {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 12px 0;
+    }
+
+    .result-error-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: #856404;
+      margin-bottom: 8px;
+    }
+
+    .result-error-type {
+      display: inline-block;
+      background: #ffc107;
+      color: #856404;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .result-error-message {
+      color: #856404;
+      margin-bottom: 8px;
+    }
+
+    .result-error-suggestion {
+      color: #6c757d;
+      font-style: italic;
+      font-size: 0.9rem;
+    }
+
+    .result-item.has-error {
+      border-left-color: #ffc107;
+      background: #fffbeb;
+    }
+
     .history-section {
       margin-top: 24px;
     }
@@ -445,6 +489,8 @@
             imageUrl: item.imageUrl,
             hasImageAltText: !!item.imageAltText,
             imageAltText: item.imageAltText,
+            hasError: !!item.error,
+            error: item.error,
           })
           
           // Handle backward compatibility with old format
@@ -455,6 +501,19 @@
           const isOldImageOnly = item.mode === 'image' && !item.pageAltText && !item.altText && item.imageAltText
           const mainAltText = isOldImageOnly ? item.imageAltText : pageAltText
           const mainLabel = isOldImageOnly ? 'Image Alt-Text' : 'Page Alt-Text'
+          
+          // Check if there's an error to display
+          const hasError = item.error && item.error.errorType
+          const errorSection = hasError ? `
+            <div class="result-error">
+              <div class="result-error-header">
+                <span class="result-error-type">${escapeHtml(item.error.errorType.replace('_', ' '))}</span>
+                ${item.error.errorCode ? `<span>HTTP ${item.error.errorCode}</span>` : ''}
+              </div>
+              <div class="result-error-message">${escapeHtml(item.error.errorMessage)}</div>
+              <div class="result-error-suggestion">${escapeHtml(item.error.suggestion)}</div>
+            </div>
+          ` : ''
           
           const imageSection = item.imageUrl ? `
             <div class="result-image-container">
@@ -490,16 +549,17 @@
             : ''
           
           return `
-            <div class="result-item">
+            <div class="result-item${hasError ? ' has-error' : ''}">
               <div class="result-url">${escapeHtml(item.url)}</div>
-              ${pageTopic ? `<div class="result-topic">Topic: ${escapeHtml(pageTopic)}</div>` : ''}
-              <div class="result-alt-text">
+              ${errorSection}
+              ${!hasError && pageTopic ? `<div class="result-topic">Topic: ${escapeHtml(pageTopic)}</div>` : ''}
+              ${!hasError ? `<div class="result-alt-text">
                 <strong>${mainLabel}:</strong><br>
                 ${escapeHtml(mainAltText)}
-              </div>
-              ${imageSection}
-              ${!isOldImageOnly && imageAltTextSection}
-              ${imageDescriptionSection}
+              </div>` : ''}
+              ${!hasError ? imageSection : ''}
+              ${!hasError && !isOldImageOnly && imageAltTextSection}
+              ${!hasError ? imageDescriptionSection : ''}
               <div class="result-meta">
                 ${item.fuelUsed !== undefined ? `<span>Fuel used: ${item.fuelUsed}</span>` : ''}
                 <span>${new Date(item.timestamp).toLocaleString()}</span>
