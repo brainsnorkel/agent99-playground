@@ -1,13 +1,21 @@
 import { serve } from 'bun'
-import { generateAltText } from './index'
+import { generateCombinedAltText } from './index'
 
 interface QueryResult {
   id: string
   url: string
-  altText: string
-  topic: string
-  fuelUsed: number
   timestamp: number
+  // Page alt-text fields
+  pageAltText: string
+  pageTopic: string
+  fuelUsed?: number
+  // Image alt-text fields
+  imageUrl?: string
+  imageAltText?: string
+  imageDescription?: string
+  imageWidth?: number
+  imageHeight?: number
+  imageSize?: number
 }
 
 // In-memory storage (in production, use a database)
@@ -76,18 +84,68 @@ serve({
           ? effectiveLLMUrl
           : `${effectiveLLMUrl}/v1`
 
-        // Process the URL
-        const result = await generateAltText(targetUrl, finalLLMUrl)
-
-        // Create query result
+        // Process the URL: generate both page and image alt-text
+        console.log(`Processing URL: ${targetUrl} with LLM: ${finalLLMUrl}`)
+        let result
+        try {
+          result = await generateCombinedAltText(targetUrl, finalLLMUrl)
+          console.log(`Processing complete. Result:`, {
+            url: result.url,
+            pageAltText: result.pageAltText,
+            pageTopic: result.pageTopic,
+            hasPageAltText: !!result.pageAltText,
+            hasImageUrl: !!result.imageUrl,
+            hasImageAltText: !!result.imageAltText,
+            imageUrl: result.imageUrl,
+            resultKeys: Object.keys(result),
+          })
+        } catch (genError: any) {
+          console.error('generateCombinedAltText failed:', genError.message)
+          console.error('Error stack:', genError.stack)
+          // Return a partial result instead of throwing
+          result = {
+            url: targetUrl,
+            pageAltText: `Error: ${genError.message}`,
+            pageTopic: 'Error occurred',
+            fuelUsed: undefined,
+            imageUrl: undefined,
+            imageAltText: undefined,
+            imageDescription: undefined,
+            imageWidth: undefined,
+            imageHeight: undefined,
+            imageSize: undefined,
+          }
+        }
+        
+        // Validate result structure
+        if (!result || !result.url) {
+          throw new Error('Invalid result structure from generateCombinedAltText')
+        }
+        
         const queryResult: QueryResult = {
           id: Date.now().toString(),
           url: result.url,
-          altText: result.altText,
-          topic: result.topic,
-          fuelUsed: result.fuelUsed,
           timestamp: Date.now(),
+          pageAltText: result.pageAltText || 'Unable to generate alt-text',
+          pageTopic: result.pageTopic || 'Unable to determine topic',
+          fuelUsed: result.fuelUsed,
+          imageUrl: result.imageUrl,
+          imageAltText: result.imageAltText,
+          imageDescription: result.imageDescription,
+          imageWidth: result.imageWidth,
+          imageHeight: result.imageHeight,
+          imageSize: result.imageSize,
         }
+        
+        console.log(`QueryResult created:`, {
+          id: queryResult.id,
+          url: queryResult.url,
+          pageAltText: queryResult.pageAltText,
+          pageTopic: queryResult.pageTopic,
+          hasImageUrl: !!queryResult.imageUrl,
+          imageUrl: queryResult.imageUrl,
+          allKeys: Object.keys(queryResult),
+        })
 
         // Add to history (at the beginning for newest first)
         queryHistory.unshift(queryResult)

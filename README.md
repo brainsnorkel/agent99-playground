@@ -2,17 +2,18 @@
 
 An example project demonstrating [agent-99](https://github.com/tonioloewald/agent-99) - a type-safe-by-design, cost-limited virtual machine for safe execution of untrusted code.
 
-This project scrapes a given URL and uses an LLM to generate a concise alt-text summary suitable for accessibility purposes (e.g., for link alt-text).
+This project demonstrates **idiomatic agent-99 patterns** for building secure, type-safe agent workflows. It scrapes URLs, extracts images, and uses LLMs to generate accessible alt-text summaries - all within agent-99's VM execution model.
 
 ## Features
 
+- **Full VM Execution**: All operations execute within agent-99's isolated VM
+- **Atom-Based Architecture**: Custom atoms for HTML processing, image extraction, and vision analysis
+- **Pipeline Composition**: Type-safe pipelines using agent-99's builder API
+- **Capability-Based Security**: All HTTP requests go through `httpFetch` atom
+- **Fuel Tracking**: All operations tracked in VM fuel system
+- **Type Safety**: Input/output schemas validated at runtime
 - **Web App Interface**: Simple, modern web UI for URL processing
-- **LLM Settings**: Configurable LLM endpoint settings
-- **Query History**: View all processed URLs with results displayed newest first
-- **Web Scraping**: Uses agent-99's `httpFetch` atom to fetch webpage content
-- **LLM Summarization**: Uses `llmPredictBattery` atom to generate accessible alt-text summaries
-- **Type-Safe**: Built with TypeScript and agent-99's schema-based type system
-- **Cost-Limited**: Execution is limited by fuel budget for safety
+- **Image Analysis**: Finds most interesting images using LLM vision scoring
 
 ## Prerequisites
 
@@ -46,141 +47,361 @@ The web app provides:
 
 ### CLI Usage
 
-You can still use the CLI interface:
-
 ```bash
-bun run src/index.ts <url>
-```
-
-Example:
-```bash
+# Generate page alt-text
 bun run src/index.ts https://example.com
+
+# Generate image alt-text
+bun run src/index.ts --image https://example.com
 ```
 
 ### Programmatic Usage
 
 ```typescript
-import { generateAltText } from './src/index'
+import { generateAltText, generateImageAltText, generateCombinedAltText } from './src/index'
 
-const result = await generateAltText('https://example.com')
-console.log(result.altText) // "Example domain for documentation and testing"
+// Generate page alt-text
+const pageResult = await generateAltText('https://example.com')
+console.log(pageResult.altText) // "Example domain for documentation and testing"
+
+// Generate image alt-text
+const imageResult = await generateImageAltText('https://example.com')
+console.log(imageResult.altText) // "Screenshot of example.com homepage"
+
+// Generate both page and image alt-text
+const combinedResult = await generateCombinedAltText('https://example.com')
+console.log(combinedResult.pageAltText) // Page alt-text
+console.log(combinedResult.imageAltText) // Image alt-text
 ```
 
-## How It Works
+## Idiomatic Agent-99 Patterns
 
-This project demonstrates key agent-99 pipelines for building type-safe, secure agent workflows. The entire process follows agent-99's execution model:
+This project demonstrates **best practices** for building agent-99 applications. All code follows the "agents-as-data" principle where logic is compiled to JSON AST and executed in an isolated VM.
+
+### Core Principles
+
+1. **Agents-as-Data**: All logic compiles to JSON AST before execution
+2. **Functions-as-Schemas**: Every operation has type-safe input/output schemas
+3. **Safe-by-Design**: Capability-based security, fuel limits, isolated execution
+4. **Pipeline Composition**: Build workflows using fluent builder API
+
+### Pattern 1: Complete Pipeline Within VM
+
+**✅ Idiomatic**: All operations execute within the VM
+
+```typescript
+const vm = createVM()
+const b = vm.A99
+
+const logic = b
+  // Step 1: Fetch webpage using httpFetch atom (capability-based security)
+  .httpFetch({ url: A99.args('url') })
+  .as('response')
+  .varGet({ key: 'response.text' })
+  .as('html')
+  
+  // Step 2: Extract text using custom atom
+  .htmlExtractText({ html: A99.args('html') })
+  .as('pageText')
+  
+  // Step 3: Build prompt using custom atom
+  .buildUserPrompt({ url: A99.args('url') })
+  .as('userPrompt')
+  
+  // Step 4: Generate alt-text using LLM atom
+  .llmPredictBattery({
+    system: '...',
+    user: A99.args('userPrompt'),
+    responseFormat: { ... }
+  })
+  .as('summary')
+  .varGet({ key: 'summary.content' })
+  .as('jsonContent')
+  .jsonParse({ str: 'jsonContent' })
+  .as('parsed')
+  
+  // Step 5: Return structured output
+  .return(
+    s.object({
+      altText: s.string,
+      topic: s.string,
+    })
+  )
+
+// Compile to AST
+const ast = logic.toJSON()
+
+// Execute in VM
+const result = await vm.run(ast, { url }, { fuel: 10000, capabilities })
+```
+
+**Benefits**:
+- ✅ Full capability-based security
+- ✅ Fuel tracking for all operations
+- ✅ Logic is serializable (can be stored/replayed)
+- ✅ Type-safe with schema validation
+
+### Pattern 2: Custom Atoms for Domain Logic
+
+**✅ Idiomatic**: Create custom atoms for reusable operations
+
+```typescript
+// Define custom atom with input/output schemas
+const extractImagesFromHTMLAtom = defineAtom(
+  'extractImagesFromHTML',
+  s.object({ html: s.string, baseUrl: s.string }), // Input schema
+  s.array(s.object({                              // Output schema
+    url: s.string,
+    width: s.any,
+    height: s.any,
+    alt: s.any,
+    area: s.any,
+  })),
+  async ({ html, baseUrl }, ctx) => {
+    // Implementation uses capabilities from context
+    return extractImagesFromHTML(html, baseUrl)
+  },
+  { docs: 'Extract image information from HTML', cost: 5 }
+)
+
+// Register in VM
+function createVM() {
+  return new AgentVM({
+    extractImagesFromHTML: extractImagesFromHTMLAtom,
+    // ... other atoms
+  })
+}
+
+// Use in pipeline
+const logic = b
+  .httpFetch({ url: A99.args('url') })
+  .as('response')
+  .varGet({ key: 'response.text' })
+  .as('html')
+  .extractImagesFromHTML({ 
+    html: A99.args('html'), 
+    baseUrl: A99.args('url') 
+  })
+  .as('images')
+```
+
+**Benefits**:
+- ✅ Reusable across pipelines
+- ✅ Type-safe with schemas
+- ✅ Cost tracking (fuel consumption)
+- ✅ Documented with metadata
+
+### Pattern 3: Parallel Processing Within Atoms
+
+**✅ Idiomatic**: Handle parallel operations inside atoms
+
+```typescript
+const processCandidateImagesAtom = defineAtom(
+  'processCandidateImages',
+  s.object({ 
+    candidates: s.array(s.object({ ... })),
+    pageContext: s.any,
+  }),
+  s.array(s.object({ ... })),
+  async ({ candidates, pageContext }, ctx) => {
+    const fetchCap = ctx.capabilities.fetch || fetch
+    const llmCap = ctx.capabilities.llm
+    
+    // Parallel fetching inside atom
+    const candidateData = await Promise.all(
+      candidates.map(async (img) => {
+        const response = await fetchCap(img.url)
+        // ... process image
+        return { img, imageData, error: null }
+      })
+    )
+    
+    // Parallel scoring inside atom
+    const scoredCandidates = await Promise.all(
+      validCandidates.map(async ({ img, imageData }) => {
+        const llmResponse = await llmCap.predictWithVision(...)
+        return { img, imageData, score: parsed.score }
+      })
+    )
+    
+    return scoredCandidates
+  },
+  { docs: 'Process candidate images in parallel', cost: 250, timeoutMs: 120000 }
+)
+```
+
+**Benefits**:
+- ✅ Parallel operations encapsulated in atom
+- ✅ Still tracked in fuel system
+- ✅ Can be reused in other pipelines
+
+### Pattern 4: Variable Management
+
+**✅ Idiomatic**: Use variable store for intermediate values
+
+```typescript
+const logic = b
+  .httpFetch({ url: A99.args('url') })
+  .as('response')                    // Alias current result
+  .varGet({ key: 'response.text' })  // Access nested property
+  .as('html')
+  .htmlExtractText({ html: A99.args('html') })
+  .as('pageText')
+  .varSet({ key: 'pageText', value: 'pageText' }) // Store for later
+  .buildUserPrompt({ url: A99.args('url') })      // Uses stored pageText
+  .as('userPrompt')
+```
+
+**Benefits**:
+- ✅ Type-safe variable access
+- ✅ Clear data flow
+- ✅ Reusable intermediate values
+
+### Pattern 5: Error Handling and Fallbacks
+
+**✅ Idiomatic**: Handle errors within atoms with fallbacks
+
+```typescript
+const scoreImageInterestingnessAtom = defineAtom(
+  'scoreImageInterestingness',
+  s.object({ ... }),
+  s.number,
+  async ({ imageDataUri, imageInfo, pageContext }, ctx) => {
+    try {
+      const llmCap = ctx.capabilities.llm
+      const llmResponse = await llmCap.predictWithVision(...)
+      const parsed = JSON.parse(llmResponse.content)
+      return parsed.score || 0
+    } catch (error) {
+      // Fallback: use size/area as proxy
+      if (imageInfo.area) return Math.min(50, imageInfo.area / 10000)
+      if (imageInfo.size) return Math.min(50, imageInfo.size / 100000)
+      return 0
+    }
+  },
+  { docs: 'Score image for interestingness', cost: 200 }
+)
+```
+
+**Benefits**:
+- ✅ Graceful degradation
+- ✅ Operations continue even if LLM fails
+- ✅ Fallback logic encapsulated
+
+### Pattern 6: Capability-Based Security
+
+**✅ Idiomatic**: All external operations use capabilities
+
+```typescript
+// Provide capabilities explicitly
+const capabilitiesWithFetch = {
+  ...customCapabilities,
+  fetch: customCapabilities.fetch || batteries.fetch || fetch,
+}
+
+// Execute with capabilities
+const result = await vm.run(
+  ast,
+  { url },
+  {
+    fuel: 10000,
+    capabilities: capabilitiesWithFetch, // Only these are available
+  }
+)
+
+// Inside atoms, access via context
+async ({ url }, ctx) => {
+  const fetchCap = ctx.capabilities.fetch // Explicit capability access
+  const response = await fetchCap(url)
+  // ...
+}
+```
+
+**Benefits**:
+- ✅ Explicit security model
+- ✅ Can restrict capabilities per execution
+- ✅ Easy to mock for testing
+
+## Architecture Overview
 
 ### Execution Flow
 
-1. **Content Extraction**: The webpage HTML is fetched and text content is extracted (outside the VM for simplicity)
-2. **Pipeline Construction**: A type-safe pipeline is built using agent-99's builder API
-3. **AST Compilation**: The pipeline is compiled to a JSON AST representation
-4. **VM Execution**: The AST is executed in an isolated VM with explicit capabilities
-5. **Result Extraction**: Structured output is returned with type validation
+1. **Pipeline Construction**: Build type-safe pipeline using builder API
+2. **AST Compilation**: Compile pipeline to JSON AST (`.toJSON()`)
+3. **VM Execution**: Execute AST in isolated VM with explicit capabilities
+4. **Result Extraction**: Get structured output with type validation
 
-### Key Agent-99 Pipelines
+### Custom Atoms
 
-The project uses several core agent-99 pipelines to build the workflow:
+This project defines several custom atoms:
 
-#### 1. **llmPredictBattery Pipeline**
-The primary pipeline for LLM interactions. This atom:
-- Makes type-safe LLM calls with structured input/output schemas
-- Supports system prompts, user messages, and tool definitions
-- Enforces JSON schema response formats for structured outputs
-- Uses battery capabilities (local or remote LLM providers)
+- **`htmlExtractText`**: Extracts text content from HTML
+- **`extractImagesFromHTML`**: Extracts image information from HTML
+- **`filterCandidateImages`**: Filters images larger than icon size
+- **`processCandidateImages`**: Fetches and scores images in parallel
+- **`scoreImageInterestingness`**: Scores images using LLM vision
+- **`buildUserPrompt`**: Constructs LLM prompts from context
+- **`llmPredictBatteryLongTimeout`**: LLM calls with extended timeout
+- **`llmVisionBattery`**: Vision-capable LLM calls
 
-```167:205:src/index.ts
-  const logic = b
-    .llmPredictBattery({
-      system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
-The alt-text should:
-- Be 50-150 characters long
-- Describe the main topic or purpose of the page
-- Be clear and informative
-- Avoid redundant phrases like "link to" or "page about"
-- Focus on what the user would find on the page
+### Pipeline Examples
 
-You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
-      user: `Generate alt-text for a link to this webpage: ${url}
+#### Example 1: Page Alt-Text Generation
 
-Here is the extracted text content from the webpage:
-
-${pageText.substring(0, 3000)}
-
-Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`,
-      responseFormat: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'alt_text_result',
-          schema: {
-            type: 'object',
-            properties: {
-              altText: {
-                type: 'string',
-                description: 'The alt-text suitable for a link to this page (50-150 characters)',
-              },
-              topic: {
-                type: 'string',
-                description: 'Brief description of the page topic',
-              },
-            },
-            required: ['altText', 'topic'],
-          },
-        },
-      },
+```typescript
+const logic = b
+  .httpFetch({ url: A99.args('url') })        // Fetch webpage
+  .as('response')
+  .varGet({ key: 'response.text' })
+  .as('html')
+  .htmlExtractText({ html: A99.args('html') }) // Extract text
+  .as('pageText')
+  .varSet({ key: 'pageText', value: 'pageText' })
+  .buildUserPrompt({ url: A99.args('url') })   // Build prompt
+  .as('userPrompt')
+  .llmPredictBattery({                         // Generate alt-text
+    system: '...',
+    user: A99.args('userPrompt'),
+    responseFormat: { ... }
+  })
+  .as('summary')
+  .varGet({ key: 'summary.content' })
+  .as('jsonContent')
+  .jsonParse({ str: 'jsonContent' })
+  .as('parsed')
+  .return(
+    s.object({
+      altText: s.string,
+      topic: s.string,
     })
+  )
 ```
 
-#### 2. **Variable Management Pipelines**
-Agent-99 provides type-safe variable operations:
+#### Example 2: Image Processing Pipeline
 
-- **`.as(alias)`**: Creates an alias for the current pipeline result, allowing reference in subsequent steps
-- **`.varGet({ key })`**: Retrieves values from the variable store using dot-notation paths
-- **`.varSet({ key, value })`**: Stores values in the variable store for later use
-
-```206:212:src/index.ts
-    .as('summary')
-    .varGet({ key: 'summary.content' })
-    .as('jsonContent')
-    .jsonParse({ str: 'jsonContent' })
-    .as('parsed')
-    .varSet({ key: 'altText', value: 'parsed.altText' })
-    .varSet({ key: 'topic', value: 'parsed.topic' })
+```typescript
+const logic = b
+  .httpFetch({ url: A99.args('url') })
+  .as('response')
+  .varGet({ key: 'response.text' })
+  .as('html')
+  .extractImagesFromHTML({                     // Extract images
+    html: A99.args('html'),
+    baseUrl: A99.args('url')
+  })
+  .as('images')
+  .filterCandidateImages({                     // Filter candidates
+    images: A99.args('images'),
+    maxCandidates: 3
+  })
+  .as('candidates')
+  .processCandidateImages({                    // Fetch & score in parallel
+    candidates: A99.args('candidates'),
+    pageContext: A99.args('pageContext')
+  })
+  .as('scoredCandidates')
+  .return(s.object({ candidates: s.array(...) }))
 ```
-
-#### 3. **Data Transformation Pipelines**
-- **`.jsonParse({ str })`**: Parses JSON strings into structured objects with type validation
-- Ensures data integrity throughout the pipeline
-
-#### 4. **Output Schema Pipeline**
-- **`.return(schema)`**: Defines the final output schema using `tosijs-schema`
-- Provides runtime type validation and ensures the VM returns only the specified structure
-
-```213:218:src/index.ts
-    .return(
-      s.object({
-        altText: s.string,
-        topic: s.string,
-      })
-    )
-```
-
-#### 5. **Additional Available Pipelines**
-While not used in this example, agent-99 provides other powerful pipelines:
-
-- **`httpFetch`**: Safe HTTP requests with capability-based security (can be used inside the VM)
-- **`storeVectorize`**: Convert text to embeddings for semantic search
-- **`storeSearch`**: Vector similarity search across stored embeddings
-- **`defineAtom`**: Create custom atoms with custom schemas and capabilities
-
-### Pipeline Execution Model
-
-1. **Builder Pattern**: Pipelines are constructed using fluent builder API (`vm.A99`)
-2. **AST Compilation**: `.toJSON()` compiles the pipeline to a JSON AST
-3. **Isolated Execution**: `vm.run()` executes the AST in a stateless, isolated environment
-4. **Capability-Based Security**: Only explicitly provided capabilities are available (LLM, HTTP, storage, etc.)
-5. **Fuel Budget**: Execution is limited by fuel to prevent runaway processes
-6. **Type Safety**: Input/output schemas are validated at runtime using `tosijs-schema`
 
 ## Configuration
 
@@ -195,117 +416,82 @@ The web app allows you to configure the LLM endpoint directly in the UI:
 
 **For Local Development with LM Studio:**
 
-Follow these step-by-step instructions to set up a local LLM:
-
-1. **Install LM Studio**
-   - Download from [LM Studio](https://lmstudio.ai/)
-   - Install and launch the application
-
-2. **Download a Model**
-   - In LM Studio, go to the "Search" tab
-   - Search for and download a compatible model (recommended: models with 3B-7B parameters for faster responses)
-   - Popular options: `llama-3.2-3b-instruct`, `phi-3-mini`, `mistral-7b-instruct`
-   - Wait for the download to complete
-
-3. **Load the Model**
-   - Go to the "Chat" tab in LM Studio
-   - Select your downloaded model from the dropdown
-   - The model will load into memory (this may take a moment)
-
-4. **Start the Local Server**
-   - Click on the "Local Server" tab in LM Studio (or use the menu: View → Local Server)
-   - Click "Start Server" button
-   - The server will start on `http://localhost:1234` by default
-   - You should see a green indicator showing the server is running
-   - **Important**: Keep LM Studio running while using this application
-
-5. **Verify Server is Running**
-   - Open a browser and navigate to `http://localhost:1234/v1/models`
-   - You should see a JSON response listing available models
-   - If you see an error, the server is not running correctly
-
-6. **Configure in the Application**
-   - In the web app, click "⚙️ LLM Settings" to expand the settings panel
-   - Enter your LLM base URL:
-     - For local: `http://localhost:1234` (the `/v1` suffix is added automatically)
-     - For remote: `http://192.168.1.61:1234` (if running on another machine)
-   - Settings are saved to browser localStorage
-
-**Troubleshooting LM Studio Setup:**
-
-- **Connection Refused Error**: 
-  - Ensure LM Studio is running and the server is started
-  - Check that the server is running on the correct port (default: 1234)
-  - Verify the URL in settings matches your server address
-
-- **Server Not Starting**:
-  - Make sure a model is loaded in the Chat tab
-  - Try restarting LM Studio
-  - Check if another application is using port 1234
-
-- **Slow Responses**:
-  - Use a smaller model (3B-7B parameters)
-  - Ensure you have sufficient RAM (models need 4-8GB+ free)
-  - Close other applications to free up resources
-
-- **Testing the Connection**:
-  ```bash
-  # Test if server is responding
-  curl http://localhost:1234/v1/models
-  
-  # Should return JSON with model information
-  ```
+1. **Install LM Studio** - Download from [LM Studio](https://lmstudio.ai/)
+2. **Download a Model** - Recommended: 3B-7B parameter models for faster responses
+3. **Load the Model** - Select model in Chat tab
+4. **Start Local Server** - Click "Local Server" tab and start server (default: `http://localhost:1234`)
+5. **Verify Server** - Navigate to `http://localhost:1234/v1/models` in browser
+6. **Configure in App** - Enter URL in settings panel
 
 **Default LLM URL:** `http://192.168.1.61:1234/v1` (can be changed in web app settings)
-
-### Production Setup
-
-For production, you can replace the battery LLM with your own capability:
-
-```typescript
-const capabilities = {
-  llmPredict: async (params) => {
-    // Your LLM implementation (OpenAI, Anthropic, etc.)
-    return await yourLLMService.generate(params)
-  }
-}
-```
 
 ## Project Structure
 
 ```
 .
 ├── src/
-│   ├── index.ts          # Core implementation (generateAltText function)
+│   ├── index.ts          # Core implementation with atoms and pipelines
 │   ├── server.ts         # Web server and API endpoints
-│   └── index.html        # Web app frontend
+│   ├── index.html        # Web app frontend
+│   └── example.test.ts   # Test suite
 ├── package.json          # Dependencies
 ├── tsconfig.json         # TypeScript configuration
 ├── README.md            # This file
 ├── TESTING.md           # Test instructions
-└── CHANGELOG.md         # Change history
+├── CHANGELOG.md         # Change history
+└── ATOM_PIPELINE_ANALYSIS.md  # Architecture analysis
 ```
 
 ## Key Concepts
 
-### Agent-99 Atoms
+### Agent-99 Execution Model
 
-- **httpFetch**: Safe HTTP requests with capability-based security
-- **llmPredictBattery**: LLM calls using local or remote models
-- **return**: Defines the output schema
-
-### Execution Model
-
-- **AST-based**: Logic is compiled to JSON AST before execution
-- **Isolated VM**: Each execution runs in a stateless, isolated environment
-- **Fuel Budget**: Execution is limited by fuel to prevent runaway processes
+- **AST-based**: Logic compiled to JSON AST before execution
+- **Isolated VM**: Each execution runs in stateless, isolated environment
+- **Fuel Budget**: Execution limited by fuel to prevent runaway processes
 - **Capabilities**: Security model where VM can only access what's explicitly provided
+
+### Schema System
+
+All atoms use `tosijs-schema` for type-safe input/output:
+
+```typescript
+s.object({
+  url: s.string,
+  width: s.any,  // Optional fields use s.any
+  height: s.any,
+})
+```
+
+### Fuel System
+
+Each atom has a cost that consumes fuel:
+
+```typescript
+defineAtom(
+  'myAtom',
+  inputSchema,
+  outputSchema,
+  implementation,
+  { docs: 'Description', cost: 10, timeoutMs: 5000 }
+)
+```
+
+## Testing
+
+Run the test suite:
+
+```bash
+bun test
+```
+
+See [TESTING.md](./TESTING.md) for detailed testing instructions.
 
 ## Limitations
 
-- The current implementation relies on the LLM's ability to extract meaningful content from HTML
-- For better results, you may want to add HTML parsing/cleaning before LLM processing
 - Local LLM requires LM Studio to be running for battery mode
+- Image processing requires vision-capable LLM models
+- Large pages may hit token limits (currently limited to 3000 chars for prompts)
 
 ## License
 
@@ -315,4 +501,3 @@ MIT
 
 - [agent-99 GitHub](https://github.com/tonioloewald/agent-99)
 - [agent-99 Documentation](https://github.com/tonioloewald/agent-99#readme)
-

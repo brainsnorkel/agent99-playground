@@ -200,6 +200,40 @@
       margin-top: 8px;
     }
 
+    .result-image-container {
+      margin: 12px 0;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .result-image-thumbnail {
+      max-width: 200px;
+      max-height: 200px;
+      border-radius: 8px;
+      border: 2px solid #e0e0e0;
+      object-fit: contain;
+      background: #f5f5f5;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+
+    .result-image-thumbnail:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    .result-image-info {
+      flex: 1;
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .result-image-info strong {
+      color: #333;
+    }
+
+
     .error {
       background: #fee;
       border-left-color: #f00;
@@ -288,20 +322,29 @@
   </div>
 
   <script>
-    // Load saved settings
-    const savedLLMUrl = localStorage.getItem('llmUrl')
-    if (savedLLMUrl) {
-      document.getElementById('llm-url').value = savedLLMUrl
-    }
+    // Wait for DOM to be ready
+    document.addEventListener('DOMContentLoaded', function() {
+      // Load saved settings
+      const savedLLMUrl = localStorage.getItem('llmUrl')
+      if (savedLLMUrl) {
+        const llmUrlInput = document.getElementById('llm-url')
+        if (llmUrlInput) {
+          llmUrlInput.value = savedLLMUrl
+        }
+      }
 
-    // Load history on page load
-    loadHistory()
+
+      // Load history on page load
+      loadHistory()
+    })
 
     function toggleSettings() {
       const content = document.getElementById('settings-content')
       const arrow = document.getElementById('settings-arrow')
-      content.classList.toggle('active')
-      arrow.textContent = content.classList.contains('active') ? '▲' : '▼'
+      if (content && arrow) {
+        content.classList.toggle('active')
+        arrow.textContent = content.classList.contains('active') ? '▲' : '▼'
+      }
     }
 
     async function processUrl() {
@@ -317,7 +360,7 @@
         return
       }
 
-      // Save LLM URL to localStorage
+      // Save preferences to localStorage
       const llmUrl = llmUrlInput.value.trim()
       if (llmUrl) {
         localStorage.setItem('llmUrl', llmUrl)
@@ -343,6 +386,19 @@
         if (!response.ok) {
           throw new Error(data.error || 'Failed to process URL')
         }
+
+        // Log the response for debugging
+        console.log('Processing response:', {
+          url: data.url,
+          pageAltText: data.pageAltText,
+          pageTopic: data.pageTopic,
+          hasPageAltText: !!data.pageAltText,
+          hasImageUrl: !!data.imageUrl,
+          hasImageAltText: !!data.imageAltText,
+          imageUrl: data.imageUrl,
+          imageAltText: data.imageAltText,
+          fullData: data, // Log full response to see structure
+        })
 
         // Clear input
         urlInput.value = ''
@@ -376,17 +432,76 @@
           return
         }
 
-        container.innerHTML = history.map(item => `
-          <div class="result-item">
-            <div class="result-url">${escapeHtml(item.url)}</div>
-            <div class="result-topic">Topic: ${escapeHtml(item.topic)}</div>
-            <div class="result-alt-text">${escapeHtml(item.altText)}</div>
-            <div class="result-meta">
-              <span>Fuel used: ${item.fuelUsed}</span>
-              <span>${new Date(item.timestamp).toLocaleString()}</span>
+        container.innerHTML = history.map(item => {
+          // Debug logging
+          console.log('Rendering history item:', {
+            url: item.url,
+            hasImageUrl: !!item.imageUrl,
+            imageUrl: item.imageUrl,
+            hasImageAltText: !!item.imageAltText,
+            imageAltText: item.imageAltText,
+          })
+          
+          // Handle backward compatibility with old format
+          const pageAltText = item.pageAltText || item.altText || 'No alt-text generated'
+          const pageTopic = item.pageTopic || item.topic || ''
+          
+          // For old entries that only have image data (mode: 'image'), show image alt-text as main
+          const isOldImageOnly = item.mode === 'image' && !item.pageAltText && !item.altText && item.imageAltText
+          const mainAltText = isOldImageOnly ? item.imageAltText : pageAltText
+          const mainLabel = isOldImageOnly ? 'Image Alt-Text' : 'Page Alt-Text'
+          
+          const imageSection = item.imageUrl ? `
+            <div class="result-image-container">
+              <img 
+                src="${escapeHtml(item.imageUrl)}" 
+                alt="${escapeHtml(item.imageAltText || pageAltText)}"
+                class="result-image-thumbnail"
+                onclick="window.open('${escapeHtml(item.imageUrl)}', '_blank')"
+                onerror="this.style.display='none'"
+              />
+              <div class="result-image-info">
+                ${item.imageWidth && item.imageHeight 
+                  ? `<div><strong>Dimensions:</strong> ${item.imageWidth} × ${item.imageHeight}px</div>` 
+                  : ''}
+                ${item.imageSize 
+                  ? `<div><strong>Size:</strong> ${(item.imageSize / 1024).toFixed(2)} KB</div>` 
+                  : ''}
+              </div>
             </div>
-          </div>
-        `).join('')
+          ` : ''
+          
+          const imageAltTextSection = item.imageAltText 
+            ? `<div class="result-alt-text" style="margin-top: 12px;">
+                <strong>Image Alt-Text:</strong><br>
+                ${escapeHtml(item.imageAltText)}
+              </div>`
+            : ''
+          
+          const imageDescriptionSection = item.imageDescription 
+            ? `<div style="margin-top: 8px; font-style: italic; color: #555; padding-left: 12px;">
+                ${escapeHtml(item.imageDescription)}
+              </div>`
+            : ''
+          
+          return `
+            <div class="result-item">
+              <div class="result-url">${escapeHtml(item.url)}</div>
+              ${pageTopic ? `<div class="result-topic">Topic: ${escapeHtml(pageTopic)}</div>` : ''}
+              <div class="result-alt-text">
+                <strong>${mainLabel}:</strong><br>
+                ${escapeHtml(mainAltText)}
+              </div>
+              ${imageSection}
+              ${!isOldImageOnly && imageAltTextSection}
+              ${imageDescriptionSection}
+              <div class="result-meta">
+                ${item.fuelUsed !== undefined ? `<span>Fuel used: ${item.fuelUsed}</span>` : ''}
+                <span>${new Date(item.timestamp).toLocaleString()}</span>
+              </div>
+            </div>
+          `
+        }).join('')
       } catch (error) {
         console.error('Failed to load history:', error)
       }
@@ -407,9 +522,14 @@
     }
 
     // Allow Enter key to submit
-    document.getElementById('url-input').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        processUrl()
+    document.addEventListener('DOMContentLoaded', function() {
+      const urlInput = document.getElementById('url-input')
+      if (urlInput) {
+        urlInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            processUrl()
+          }
+        })
       }
     })
   </script>
