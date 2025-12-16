@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Fixed (2025-12-17) - Documentation Accuracy Review
+- **README.md**: Added missing `fetchImageData` atom to Custom Atoms list (was listed in QUICK_REFERENCE.md but not README)
+- **TESTING.md**: Clarified alt-text length ranges (page: 50-150 chars, image: 50-200 chars)
+- **config.ts**: Changed default LLM URL from private IP (`192.168.1.61`) to `localhost:1234` for standard LM Studio setup
+- **index.ts**: Centralized all LLM URL defaults to use `DEFAULT_LLM_URL` from config.ts instead of hardcoded values
+
 ### Improved (2025-12-17) - Code Review Recommendations
 - **Added debug flag for logging**: Debug output now controlled by `AGENT99_DEBUG=1` or `DEBUG=1` environment variables
   - Introduced `debugLog()` and `debugWarn()` functions that only output when debug is enabled

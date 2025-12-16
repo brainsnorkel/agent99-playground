@@ -350,6 +350,7 @@ This project defines several custom atoms:
 - **`filterCandidateImages`**: Filters images larger than icon size
 - **`processCandidateImages`**: Fetches and scores images in parallel
 - **`scoreImageInterestingness`**: Scores images using LLM vision
+- **`fetchImageData`**: Fetches image data and converts to base64 data URI
 - **`buildUserPrompt`**: Constructs LLM prompts from context
 - **`llmPredictBatteryLongTimeout`**: LLM calls with extended timeout
 - **`llmVisionBattery`**: Vision-capable LLM calls

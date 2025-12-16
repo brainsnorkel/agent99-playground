@@ -8,6 +8,7 @@ import {
   defineAtom,
 } from 'agent-99'
 import { s } from 'tosijs-schema'
+import { DEFAULT_LLM_URL } from './config'
 
 /**
  * Debug flag - set AGENT99_DEBUG=1 or DEBUG=1 to enable verbose logging
@@ -532,7 +533,7 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
@@ -812,7 +813,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
@@ -2261,7 +2262,7 @@ export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) 
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   
   // Create capabilities with vision support - always use createCustomCapabilities
@@ -2447,7 +2448,7 @@ async function main() {
   const mode = process.argv[2]
   const url = process.argv[3]
   // Default to custom LLM URL, ensure it has /v1 suffix for LM Studio compatibility
-  const llmBaseUrl = process.env.LLM_URL || 'http://192.168.1.61:1234'
+  const llmBaseUrl = process.env.LLM_URL || DEFAULT_LLM_URL.replace('/v1', '')
   const llmUrl = llmBaseUrl.endsWith('/v1') ? llmBaseUrl : `${llmBaseUrl}/v1`
 
   // Support both: "bun run src/index.ts <url>" and "bun run src/index.ts --image <url>"
