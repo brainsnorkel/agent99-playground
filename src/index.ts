@@ -62,20 +62,41 @@ function resolveUrl(url: string, baseUrl: string): string {
 
 /**
  * Extracts all images from HTML and returns their information
+ * Handles: <img> tags, <picture> elements, data URIs, and srcset attributes
  */
 function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
   const images: ImageInfo[] = []
+  
+  // Extract <img> tags
   const imgRegex = /<img[^>]+>/gi
   const matches = html.matchAll(imgRegex)
 
   for (const match of matches) {
     const imgTag = match[0]
     
-    // Extract src attribute
-    const srcMatch = imgTag.match(/src=["']([^"']+)["']/i)
-    if (!srcMatch) continue
+    // Extract src attribute (primary source)
+    let srcMatch = imgTag.match(/src=["']([^"']+)["']/i)
+    let src = srcMatch ? srcMatch[1] : null
     
-    const src = srcMatch[1]
+    // If no src, try data-src (lazy loading)
+    if (!src) {
+      srcMatch = imgTag.match(/data-src=["']([^"']+)["']/i)
+      src = srcMatch ? srcMatch[1] : null
+    }
+    
+    // Skip data URIs that are too small (likely icons/sprites)
+    if (src && src.startsWith('data:')) {
+      // Only include data URIs if they seem substantial (more than just a small icon)
+      if (src.length < 1000) continue // Skip small data URIs (likely icons)
+    }
+    
+    if (!src) continue
+    
+    // Skip very small images (likely icons, sprites, or tracking pixels)
+    if (src.includes('icon') || src.includes('sprite') || src.includes('pixel') || src.includes('tracking')) {
+      continue
+    }
+    
     const absoluteUrl = resolveUrl(src, baseUrl)
     
     // Extract width and height attributes
@@ -83,19 +104,99 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
     const heightMatch = imgTag.match(/height=["']?(\d+)["']?/i)
     const altMatch = imgTag.match(/alt=["']([^"']*)["']/i)
     
+    // Also check for srcset to get larger image sizes
+    const srcsetMatch = imgTag.match(/srcset=["']([^"']+)["']/i)
+    let largestSrcsetUrl = absoluteUrl
+    if (srcsetMatch) {
+      // Parse srcset: "url1 1x, url2 2x, url3 800w" format
+      const srcsetEntries = srcsetMatch[1].split(',').map(s => s.trim())
+      let largestSize = 0
+      for (const entry of srcsetEntries) {
+        const parts = entry.split(/\s+/)
+        const url = parts[0]
+        const size = parts[1] ? parseInt(parts[1]) : 0
+        if (size > largestSize) {
+          largestSize = size
+          largestSrcsetUrl = resolveUrl(url, baseUrl)
+        }
+      }
+    }
+    
     const width = widthMatch ? parseInt(widthMatch[1], 10) : undefined
     const height = heightMatch ? parseInt(heightMatch[1], 10) : undefined
     const alt = altMatch ? altMatch[1] : undefined
     
     const area = (width && height) ? width * height : undefined
     
+    // Use the largest srcset URL if available, otherwise use the src URL
     images.push({
-      url: absoluteUrl,
+      url: largestSrcsetUrl,
       width,
       height,
       alt,
       area,
     })
+  }
+  
+  // Also extract images from <picture> elements
+  const pictureRegex = /<picture[^>]*>([\s\S]*?)<\/picture>/gi
+  const pictureMatches = html.matchAll(pictureRegex)
+  
+  for (const match of pictureMatches) {
+    const pictureContent = match[1]
+    // Find <img> inside <picture>
+    const imgInPicture = pictureContent.match(/<img[^>]+>/i)
+    if (imgInPicture) {
+      const imgTag = imgInPicture[0]
+      
+      // Extract src or data-src
+      let srcMatch = imgTag.match(/src=["']([^"']+)["']/i) || imgTag.match(/data-src=["']([^"']+)["']/i)
+      if (!srcMatch) continue
+      
+      const src = srcMatch[1]
+      if (src.startsWith('data:') && src.length < 1000) continue
+      
+      const absoluteUrl = resolveUrl(src, baseUrl)
+      
+      // Check <source> elements for larger images
+      const sourceMatches = pictureContent.matchAll(/<source[^>]+>/gi)
+      let bestSourceUrl = absoluteUrl
+      let bestSize = 0
+      
+      for (const sourceMatch of sourceMatches) {
+        const sourceTag = sourceMatch[0]
+        const srcsetMatch = sourceTag.match(/srcset=["']([^"']+)["']/i)
+        if (srcsetMatch) {
+          const srcsetEntries = srcsetMatch[1].split(',').map(s => s.trim())
+          for (const entry of srcsetEntries) {
+            const parts = entry.split(/\s+/)
+            const url = parts[0]
+            const size = parts[1] ? parseInt(parts[1]) : 0
+            if (size > bestSize) {
+              bestSize = size
+              bestSourceUrl = resolveUrl(url, baseUrl)
+            }
+          }
+        }
+      }
+      
+      const widthMatch = imgTag.match(/width=["']?(\d+)["']?/i)
+      const heightMatch = imgTag.match(/height=["']?(\d+)["']?/i)
+      const altMatch = imgTag.match(/alt=["']([^"']*)["']/i)
+      
+      const width = widthMatch ? parseInt(widthMatch[1], 10) : undefined
+      const height = heightMatch ? parseInt(heightMatch[1], 10) : undefined
+      const alt = altMatch ? altMatch[1] : undefined
+      const area = (width && height) ? width * height : undefined
+      
+      images.push({
+        url: bestSourceUrl,
+        width,
+        height,
+        alt,
+        area,
+      })
+    }
   }
   
   return images
@@ -158,8 +259,22 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
   const images = extractImagesFromHTML(html, url)
   
   if (images.length === 0) {
-    throw new Error('No images found on the page')
+    // Try to provide helpful debugging info
+    const hasImgTag = html.includes('<img') || html.toLowerCase().includes('<img')
+    const hasPictureTag = html.includes('<picture') || html.toLowerCase().includes('<picture')
+    const hasImageMentions = (html.match(/image/gi) || []).length
+    
+    let errorMsg = 'No images found on the page.'
+    if (!hasImgTag && !hasPictureTag) {
+      errorMsg += ' The page does not appear to contain <img> or <picture> tags in the initial HTML. This may indicate that images are loaded via JavaScript, CSS background images, or other dynamic methods that require browser rendering.'
+    } else if (hasImageMentions > 0) {
+      errorMsg += ` The page mentions "image" ${hasImageMentions} time(s) but no extractable image tags were found.`
+    }
+    
+    throw new Error(errorMsg)
   }
+  
+  console.log(`Found ${images.length} image(s) on the page`)
   
   // Find the largest image
   // Priority: area (width * height) > size > first image
