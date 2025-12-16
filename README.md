@@ -4,6 +4,8 @@ An example project demonstrating [agent-99](https://github.com/tonioloewald/agen
 
 This project demonstrates **idiomatic agent-99 patterns** for building secure, type-safe agent workflows. It scrapes URLs, extracts images, and uses LLMs to generate accessible alt-text summaries - all within agent-99's VM execution model.
 
+![URL Summarizer Screenshot](docs/Screenshot.png)
+
 ## Features
 
 - **Full VM Execution**: All operations execute within agent-99's isolated VM
@@ -87,7 +89,7 @@ This project demonstrates **best practices** for building agent-99 applications.
 
 ### Pattern 1: Complete Pipeline Within VM
 
-**✅ Idiomatic**: All operations execute within the VM
+**Idiomatic**: All operations execute within the VM
 
 ```typescript
 const vm = createVM()
@@ -138,14 +140,14 @@ const result = await vm.run(ast, { url }, { fuel: 10000, capabilities })
 ```
 
 **Benefits**:
-- ✅ Full capability-based security
-- ✅ Fuel tracking for all operations
-- ✅ Logic is serializable (can be stored/replayed)
-- ✅ Type-safe with schema validation
+- Full capability-based security
+- Fuel tracking for all operations
+- Logic is serializable (can be stored/replayed)
+- Type-safe with schema validation
 
 ### Pattern 2: Custom Atoms for Domain Logic
 
-**✅ Idiomatic**: Create custom atoms for reusable operations
+**Idiomatic**: Create custom atoms for reusable operations
 
 ```typescript
 // Define custom atom with input/output schemas
@@ -188,14 +190,14 @@ const logic = b
 ```
 
 **Benefits**:
-- ✅ Reusable across pipelines
-- ✅ Type-safe with schemas
-- ✅ Cost tracking (fuel consumption)
-- ✅ Documented with metadata
+- Reusable across pipelines
+- Type-safe with schemas
+- Cost tracking (fuel consumption)
+- Documented with metadata
 
 ### Pattern 3: Parallel Processing Within Atoms
 
-**✅ Idiomatic**: Handle parallel operations inside atoms
+**Idiomatic**: Handle parallel operations inside atoms
 
 ```typescript
 const processCandidateImagesAtom = defineAtom(
@@ -233,13 +235,13 @@ const processCandidateImagesAtom = defineAtom(
 ```
 
 **Benefits**:
-- ✅ Parallel operations encapsulated in atom
-- ✅ Still tracked in fuel system
-- ✅ Can be reused in other pipelines
+- Parallel operations encapsulated in atom
+- Still tracked in fuel system
+- Can be reused in other pipelines
 
 ### Pattern 4: Variable Management
 
-**✅ Idiomatic**: Use variable store for intermediate values
+**Idiomatic**: Use variable store for intermediate values
 
 ```typescript
 const logic = b
@@ -255,13 +257,13 @@ const logic = b
 ```
 
 **Benefits**:
-- ✅ Type-safe variable access
-- ✅ Clear data flow
-- ✅ Reusable intermediate values
+- Type-safe variable access
+- Clear data flow
+- Reusable intermediate values
 
 ### Pattern 5: Error Handling and Fallbacks
 
-**✅ Idiomatic**: Handle errors within atoms with fallbacks
+**Idiomatic**: Handle errors within atoms with fallbacks
 
 ```typescript
 const scoreImageInterestingnessAtom = defineAtom(
@@ -286,13 +288,13 @@ const scoreImageInterestingnessAtom = defineAtom(
 ```
 
 **Benefits**:
-- ✅ Graceful degradation
-- ✅ Operations continue even if LLM fails
-- ✅ Fallback logic encapsulated
+- Graceful degradation
+- Operations continue even if LLM fails
+- Fallback logic encapsulated
 
 ### Pattern 6: Capability-Based Security
 
-**✅ Idiomatic**: All external operations use capabilities
+**Idiomatic**: All external operations use capabilities
 
 ```typescript
 // Provide capabilities explicitly
@@ -320,9 +322,9 @@ async ({ url }, ctx) => {
 ```
 
 **Benefits**:
-- ✅ Explicit security model
-- ✅ Can restrict capabilities per execution
-- ✅ Easy to mock for testing
+- Explicit security model
+- Can restrict capabilities per execution
+- Easy to mock for testing
 
 ## Architecture Overview
 
@@ -433,7 +435,7 @@ const logic = b
 
 The web app allows you to configure the LLM endpoint directly in the UI:
 
-1. Click the "⚙️ LLM Settings" panel to expand it
+1. Click the "LLM Settings" panel to expand it
 2. Enter your LLM base URL (e.g., `http://localhost:1234/v1` or `http://192.168.1.61:1234/v1`)
 3. The `/v1` suffix is automatically added if not present
 4. Settings are saved to browser localStorage

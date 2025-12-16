@@ -57,12 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Response body is read once via extractResponseText and stored for reuse
 
 ### Benefits
-- ✅ **100% Compliance**: All functions now fully comply with agent-99 principles
-- ✅ **Security**: All HTTP calls go through `httpFetch` atom
-- ✅ **Observability**: All operations tracked in fuel system
-- ✅ **Portability**: Workflows can be serialized and replayed
-- ✅ **Type Safety**: All operations have schemas
-- ✅ **Consistency**: All functions follow same execution model
+- **100% Compliance**: All functions now fully comply with agent-99 principles
+- **Security**: All HTTP calls go through `httpFetch` atom
+- **Observability**: All operations tracked in fuel system
+- **Portability**: Workflows can be serialized and replayed
+- **Type Safety**: All operations have schemas
+- **Consistency**: All functions follow same execution model
 
 ### Testing
 - All 16 tests passing
