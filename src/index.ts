@@ -10,6 +10,30 @@ import {
 import { s } from 'tosijs-schema'
 
 /**
+ * Debug flag - set AGENT99_DEBUG=1 or DEBUG=1 to enable verbose logging
+ * This controls debug output from custom atoms and pipeline execution
+ */
+const DEBUG = process.env.AGENT99_DEBUG === '1' || process.env.DEBUG === '1'
+
+/**
+ * Debug logger - only logs when DEBUG flag is enabled
+ */
+function debugLog(...args: any[]) {
+  if (DEBUG) {
+    console.log(...args)
+  }
+}
+
+/**
+ * Debug warning - only logs when DEBUG flag is enabled
+ */
+function debugWarn(...args: any[]) {
+  if (DEBUG) {
+    console.warn(...args)
+  }
+}
+
+/**
  * Represents an image found on a webpage
  */
 interface ImageInfo {
@@ -21,6 +45,49 @@ interface ImageInfo {
   area?: number // width * height for comparison
   source?: string // Where the image was found: 'img', 'picture', 'css-background', 'data-bg'
 }
+
+/**
+ * Reusable schema for ImageInfo objects
+ * 
+ * Note: tosijs-schema doesn't support optional/nullable types directly,
+ * so we use s.any for fields that may be undefined. The TypeScript interface
+ * above provides compile-time type safety, while this schema provides
+ * runtime structure validation.
+ * 
+ * Expected types for s.any fields:
+ * - width: number | undefined
+ * - height: number | undefined  
+ * - alt: string | undefined
+ * - area: number | undefined (computed: width * height)
+ * - size: number | undefined (file size in bytes)
+ * - source: string | undefined ('img' | 'picture' | 'css-background' | 'data-bg')
+ */
+const imageInfoSchema = s.object({
+  url: s.string,
+  width: s.any,  // number | undefined
+  height: s.any, // number | undefined
+  alt: s.any,    // string | undefined
+  area: s.any,   // number | undefined
+  size: s.any,   // number | undefined
+  source: s.any, // string | undefined
+})
+
+/**
+ * Schema for image data returned from fetch operations
+ */
+const imageDataSchema = s.object({
+  size: s.number,
+  base64: s.string,
+})
+
+/**
+ * Schema for scored candidate images (image + data + score)
+ */
+const scoredCandidateSchema = s.object({
+  img: imageInfoSchema,
+  imageData: imageDataSchema,
+  score: s.number,
+})
 
 /**
  * Extracts text content from HTML string
@@ -75,7 +142,7 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
   
   // Ensure html is a string
   if (!html || typeof html !== 'string') {
-    console.warn('extractImagesFromHTML: html is not a string, got:', typeof html, html)
+    debugWarn('extractImagesFromHTML: html is not a string, got:', typeof html, html)
     return []
   }
   
@@ -85,9 +152,9 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
   
   // Debug: log how many img tags found
   if (matches.length === 0) {
-    console.warn('extractImagesFromHTML: No <img> tags found in HTML')
+    debugWarn('extractImagesFromHTML: No <img> tags found in HTML')
   } else {
-    console.log(`extractImagesFromHTML: Found ${matches.length} <img> tags`)
+    debugLog(`extractImagesFromHTML: Found ${matches.length} <img> tags`)
   }
 
   for (const match of matches) {
@@ -116,7 +183,7 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
     
     if (!src) {
       // Debug: log when src is missing
-      console.debug('extractImagesFromHTML: Skipping img tag with no src:', imgTag.substring(0, 100))
+      debugLog('extractImagesFromHTML: Skipping img tag with no src:', imgTag.substring(0, 100))
       continue
     }
     
@@ -182,11 +249,11 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
     })
     
     // Debug: log extracted image
-    console.debug(`extractImagesFromHTML: Extracted image: ${largestSrcsetUrl.substring(0, 80)}... (${width}x${height})`)
+    debugLog(`extractImagesFromHTML: Extracted image: ${largestSrcsetUrl.substring(0, 80)}... (${width}x${height})`)
   }
   
   // Debug: log total images found
-  console.log(`extractImagesFromHTML: Extracted ${images.length} images from ${matches.length} img tags`)
+  debugLog(`extractImagesFromHTML: Extracted ${images.length} images from ${matches.length} img tags`)
   
   // Also extract images from <picture> elements
   const pictureRegex = /<picture[^>]*>([\s\S]*?)<\/picture>/gi
@@ -253,7 +320,7 @@ function extractImagesFromHTML(html: string, baseUrl: string): ImageInfo[] {
   // Matches: style="background-image: url(...)" or style="background: url(...)"
   const bgImageCount = extractCSSBackgroundImages(html, baseUrl, images)
   if (bgImageCount > 0) {
-    console.log(`extractImagesFromHTML: Found ${bgImageCount} CSS background images`)
+    debugLog(`extractImagesFromHTML: Found ${bgImageCount} CSS background images`)
   }
   
   return images
@@ -307,7 +374,7 @@ function extractCSSBackgroundImages(html: string, baseUrl: string, images: Image
       })
       count++
       
-      console.debug(`extractCSSBackgroundImages: Found background image: ${absoluteUrl.substring(0, 80)}...`)
+      debugLog(`extractCSSBackgroundImages: Found background image: ${absoluteUrl.substring(0, 80)}...`)
     }
   }
   
@@ -341,6 +408,16 @@ function extractCSSBackgroundImages(html: string, baseUrl: string, images: Image
 
 /**
  * Fetches an image and returns its size and base64 representation
+ * 
+ * NOTE: This is a TEST UTILITY function that uses direct fetch() outside the VM.
+ * For production use, prefer the `fetchImageData` atom which executes within
+ * agent-99's capability-based security model.
+ * 
+ * This function is exported primarily for use in tests (see example.test.ts)
+ * where direct image fetching is needed without setting up the full VM pipeline.
+ * 
+ * @param imageUrl - URL of the image to fetch
+ * @returns Object with size (bytes), base64 data URI, and optional dimensions
  */
 export async function fetchImageData(imageUrl: string): Promise<{ size: number; base64: string; width?: number; height?: number }> {
   try {
@@ -447,21 +524,7 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
     // Step 5: Return scored candidates (we'll select best outside pipeline for now)
     .return(
       s.object({
-        candidates: s.array(s.object({
-          img: s.object({
-            url: s.string,
-            width: s.any,
-            height: s.any,
-            alt: s.any,
-            area: s.any,
-            size: s.any,
-          }),
-          imageData: s.object({
-            size: s.number,
-            base64: s.string,
-          }),
-          score: s.number,
-        })),
+        candidates: s.array(scoredCandidateSchema),
       })
     )
   
@@ -495,7 +558,7 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
       }
     )
   } catch (vmError: any) {
-    console.error('VM execution failed:', vmError.message)
+    debugWarn('VM execution failed:', vmError.message)
     throw vmError
   }
   
@@ -510,7 +573,7 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
     current.score > best.score ? current : best
   )
   
-  console.log(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
+  debugLog(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
   
   const imageData = mostInteresting.imageData
   const mostInterestingImage = mostInteresting.img
@@ -634,8 +697,8 @@ Please analyze the image and provide a JSON response with:
       }
     }
   } catch (vmError: any) {
-    console.error('VM execution failed for alt-text generation:', vmError.message)
-    console.error('VM error stack:', vmError.stack)
+    debugWarn('VM execution failed for alt-text generation:', vmError.message)
+    debugLog('VM error stack:', vmError.stack)
     // Fallback to empty values
     altText = undefined
     description = undefined
@@ -741,14 +804,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
       s.object({
         pageAltText: s.string,
         pageTopic: s.string,
-        images: s.array(s.object({
-          url: s.string,
-          width: s.any,
-          height: s.any,
-          alt: s.any,
-          area: s.any,
-          size: s.any,
-        })),
+        images: s.array(imageInfoSchema),
       })
     )
   
@@ -795,32 +851,32 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
     
     // Debug: Log response structure
     if (responseObj) {
-      console.log('Response object keys:', Object.keys(responseObj))
+      debugLog('Response object keys:', Object.keys(responseObj))
       if (responseObj.text) {
-        console.log(`Response.text length: ${responseObj.text.length} chars`)
+        debugLog(`Response.text length: ${responseObj.text.length} chars`)
       } else {
-        console.warn('Response object exists but has no .text property')
-        console.log('Response object sample:', JSON.stringify(responseObj).substring(0, 200))
+        debugWarn('Response object exists but has no .text property')
+        debugLog('Response object sample:', JSON.stringify(responseObj).substring(0, 200))
       }
     } else {
-      console.warn('No response object found in pipeline vars')
+      debugWarn('No response object found in pipeline vars')
     }
     
     if (!htmlContent || htmlContent.trim().length === 0) {
-      console.warn('WARNING: No HTML content was fetched from the URL. The LLM response may be generic/hallucinated.')
-      console.warn('Debug - pipeline vars keys:', Object.keys(pipelineResult?.vars || {}))
+      debugWarn('WARNING: No HTML content was fetched from the URL. The LLM response may be generic/hallucinated.')
+      debugWarn('Debug - pipeline vars keys:', Object.keys(pipelineResult?.vars || {}))
     } else if (!pageTextContent || pageTextContent.trim().length === 0) {
-      console.warn('WARNING: HTML was fetched but no text could be extracted. The page may require JavaScript or have no text content.')
+      debugWarn('WARNING: HTML was fetched but no text could be extracted. The page may require JavaScript or have no text content.')
     }
     
-    console.log('Pipeline result - pageAltText:', pageAltText, 'pageTopic:', pageTopic)
-    console.log(`Found ${images.length} image(s) on the page`)
+    debugLog('Pipeline result - pageAltText:', pageAltText, 'pageTopic:', pageTopic)
+    debugLog(`Found ${images.length} image(s) on the page`)
     if (htmlContent) {
-      console.log(`HTML content length: ${htmlContent.length} chars, extracted text length: ${pageTextContent.length} chars`)
+      debugLog(`HTML content length: ${htmlContent.length} chars, extracted text length: ${pageTextContent.length} chars`)
     }
   } catch (vmError: any) {
-    console.error('VM execution failed:', vmError.message)
-    console.error('VM error stack:', vmError.stack)
+    debugWarn('VM execution failed:', vmError.message)
+    debugLog('VM error stack:', vmError.stack)
     pageAltText = undefined
     pageTopic = undefined
     // Keep fuelUsed as accumulated (don't reset it)
@@ -856,21 +912,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
         // Return scored candidates
         .return(
           s.object({
-            candidates: s.array(s.object({
-              img: s.object({
-                url: s.string,
-                width: s.any,
-                height: s.any,
-                alt: s.any,
-                area: s.any,
-                size: s.any,
-              }),
-              imageData: s.object({
-                size: s.number,
-                base64: s.string,
-              }),
-              score: s.number,
-            })),
+            candidates: s.array(scoredCandidateSchema),
           })
         )
       
@@ -891,24 +933,24 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
         fuelUsed += imagePipelineResult?.fuelUsed || 0
         
         const scoredCandidates = imagePipelineResult?.result?.candidates || []
-        console.log('Image pipeline result:', JSON.stringify(imagePipelineResult?.result || {}).substring(0, 500))
-        console.log('Scored candidates count:', scoredCandidates.length)
+        debugLog('Image pipeline result:', JSON.stringify(imagePipelineResult?.result || {}).substring(0, 500))
+        debugLog('Scored candidates count:', scoredCandidates.length)
         
         if (scoredCandidates.length === 0) {
-          console.log('No candidate images processed')
+          debugLog('No candidate images processed')
         } else {
-          console.log('First scored candidate:', JSON.stringify(scoredCandidates[0] || {}).substring(0, 300))
+          debugLog('First scored candidate:', JSON.stringify(scoredCandidates[0] || {}).substring(0, 300))
           
           // Find the most interesting image - with safety check
           const validScoredCandidates = scoredCandidates.filter((c: any) => c && c.img && c.score !== undefined)
-          if (validScoredCandidates.length === 0) {
-            console.log('No valid scored candidates with img and score')
-          } else {
-            const mostInteresting = validScoredCandidates.reduce((best: any, current: any) => 
-              current.score > best.score ? current : best
-            )
-            
-            console.log(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
+            if (validScoredCandidates.length === 0) {
+              debugLog('No valid scored candidates with img and score')
+            } else {
+              const mostInteresting = validScoredCandidates.reduce((best: any, current: any) => 
+                current.score > best.score ? current : best
+              )
+              
+              debugLog(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
             
             const mostInterestingImage = mostInteresting.img
             const imageData = mostInteresting.imageData
@@ -1017,7 +1059,7 @@ Please analyze the image and provide a JSON response with:
                 }
               }
             } catch (vmError: any) {
-              console.error('VM execution failed for image alt-text:', vmError.message)
+              debugWarn('VM execution failed for image alt-text:', vmError.message)
               imageAltText = undefined
               imageDescription = undefined
             }
@@ -1033,17 +1075,17 @@ Please analyze the image and provide a JSON response with:
           }
         }
       } catch (imagePipelineError: any) {
-        console.error('Image pipeline failed:', imagePipelineError.message)
+        debugWarn('Image pipeline failed:', imagePipelineError.message)
       }
     } catch (error: any) {
-      console.error('Image processing failed:', error.message)
-      console.error('Error stack:', error.stack)
-      console.error('Error details:', error)
+      debugWarn('Image processing failed:', error.message)
+      debugLog('Error stack:', error.stack)
+      debugLog('Error details:', error)
       // Don't silently fail - log the error but continue
       imageResult = null
     }
   } else {
-    console.log('No images found on the page')
+    debugLog('No images found on the page')
   }
   
   // Ensure we have valid strings (not undefined or empty)
@@ -1085,7 +1127,7 @@ Please analyze the image and provide a JSON response with:
     if (imageResult.imageSize !== undefined) finalResult.imageSize = imageResult.imageSize
   }
   
-  console.log('Final result:', {
+  debugLog('Final result:', {
     url: finalResult.url,
     pageAltText: finalResult.pageAltText,
     pageTopic: finalResult.pageTopic,
@@ -1097,7 +1139,7 @@ Please analyze the image and provide a JSON response with:
   
   // Validate that we're returning the expected structure
   if (!finalResult.pageAltText || !finalResult.pageTopic) {
-    console.error('ERROR: Final result missing required fields!', finalResult)
+    debugWarn('ERROR: Final result missing required fields!', finalResult)
   }
   
   return finalResult
@@ -1508,60 +1550,60 @@ const extractResponseText = defineAtom(
   s.string,
   async ({ response }: { response: any }, ctx: any) => {
     // Debug: Log what we received and context state
-    console.log('extractResponseText: Input response type:', typeof response)
-    console.log('extractResponseText: Context state keys:', Object.keys(ctx.state || {}))
-    console.log('extractResponseText: Context vars keys:', Object.keys(ctx.vars || {}))
+    debugLog('extractResponseText: Input response type:', typeof response)
+    debugLog('extractResponseText: Context state keys:', Object.keys(ctx.state || {}))
+    debugLog('extractResponseText: Context vars keys:', Object.keys(ctx.vars || {}))
     
     // Handle argument references - resolve from state/vars/args
     let actualResponse = response
     if (response && typeof response === 'object' && '$kind' in response && response.$kind === 'arg') {
       const path = response.path
-      console.log('extractResponseText: Got argument reference, resolving. Path:', path)
+      debugLog('extractResponseText: Got argument reference, resolving. Path:', path)
       // Try args first (for direct function arguments), then state (for .as() results), then vars
       actualResponse = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path]
-      console.log('extractResponseText: Resolved from:', 
+      debugLog('extractResponseText: Resolved from:', 
         ctx.args?.[path] !== undefined ? 'args' : 
         ctx.state?.[path] !== undefined ? 'state' : 
         ctx.vars?.[path] !== undefined ? 'vars' : 'none')
-      console.log('extractResponseText: Resolved response type:', typeof actualResponse)
+      debugLog('extractResponseText: Resolved response type:', typeof actualResponse)
     }
     
     // Handle different response formats
     if (typeof actualResponse === 'string') {
-      console.log(`extractResponseText: Response is already a string, length: ${actualResponse.length} chars`)
+      debugLog(`extractResponseText: Response is already a string, length: ${actualResponse.length} chars`)
       return actualResponse
     } else if (actualResponse && typeof actualResponse === 'object') {
       // Check if it's a Response object with .text() method
       if ('text' in actualResponse && typeof actualResponse.text === 'function') {
-        console.log('extractResponseText: Found Response object with .text() method, calling it')
+        debugLog('extractResponseText: Found Response object with .text() method, calling it')
         try {
           const text = await actualResponse.text()
-          console.log(`extractResponseText: Got text from Response, length: ${text.length} chars`)
+          debugLog(`extractResponseText: Got text from Response, length: ${text.length} chars`)
           return text
         } catch (e: any) {
-          console.error('extractResponseText: Error calling .text():', e.message)
+          debugWarn('extractResponseText: Error calling .text():', e.message)
           return ''
         }
       } else if ('text' in actualResponse && typeof actualResponse.text === 'string') {
-        console.log(`extractResponseText: Extracted text property, length: ${actualResponse.text.length} chars`)
+        debugLog(`extractResponseText: Extracted text property, length: ${actualResponse.text.length} chars`)
         return actualResponse.text
       } else if ('content' in actualResponse && typeof actualResponse.content === 'string') {
-        console.log(`extractResponseText: Extracted content, length: ${actualResponse.content.length} chars`)
+        debugLog(`extractResponseText: Extracted content, length: ${actualResponse.content.length} chars`)
         return actualResponse.content
       } else if ('body' in actualResponse && typeof actualResponse.body === 'string') {
-        console.log(`extractResponseText: Extracted body, length: ${actualResponse.body.length} chars`)
+        debugLog(`extractResponseText: Extracted body, length: ${actualResponse.body.length} chars`)
         return actualResponse.body
       } else {
-        console.warn('extractResponseText: Response object has no extractable text property')
-        console.warn('extractResponseText: Response keys:', Object.keys(actualResponse || {}))
+        debugWarn('extractResponseText: Response object has no extractable text property')
+        debugWarn('extractResponseText: Response keys:', Object.keys(actualResponse || {}))
         // Try to stringify and see what we have
         try {
-          console.warn('extractResponseText: Response sample:', JSON.stringify(actualResponse).substring(0, 500))
+          debugLog('extractResponseText: Response sample:', JSON.stringify(actualResponse).substring(0, 500))
         } catch { /* ignore */ }
         return ''
       }
     }
-    console.warn('extractResponseText: Invalid response type:', typeof actualResponse, 'value:', actualResponse)
+    debugWarn('extractResponseText: Invalid response type:', typeof actualResponse, 'value:', actualResponse)
     return ''
   },
   { docs: 'Extract text content from HTTP response object (handles Response objects and strings)', cost: 1 }
@@ -1577,30 +1619,30 @@ const htmlExtractText = defineAtom(
   s.string,
   async ({ html }: { html: string }, ctx: any) => {
     // Debug: Log HTML input and context
-    console.log('htmlExtractText: Input html type:', typeof html)
-    console.log('htmlExtractText: Context state keys:', Object.keys(ctx.state || {}))
-    console.log('htmlExtractText: Context vars keys:', Object.keys(ctx.vars || {}))
+    debugLog('htmlExtractText: Input html type:', typeof html)
+    debugLog('htmlExtractText: Context state keys:', Object.keys(ctx.state || {}))
+    debugLog('htmlExtractText: Context vars keys:', Object.keys(ctx.vars || {}))
     
     // Handle argument references - resolve from args/state/vars
     let actualHtml: any = html
     if (html && typeof html === 'object' && '$kind' in html && (html as any).$kind === 'arg') {
       const path = (html as any).path
-      console.log('htmlExtractText: Got argument reference, resolving. Path:', path)
+      debugLog('htmlExtractText: Got argument reference, resolving. Path:', path)
       // Try args first, then state (for .as() results), then vars
       actualHtml = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path]
-      console.log('htmlExtractText: Resolved from:', 
+      debugLog('htmlExtractText: Resolved from:', 
         ctx.args?.[path] !== undefined ? 'args' : 
         ctx.state?.[path] !== undefined ? 'state' : 
         ctx.vars?.[path] !== undefined ? 'vars' : 'none')
-      console.log('htmlExtractText: Resolved HTML type:', typeof actualHtml,
+      debugLog('htmlExtractText: Resolved HTML type:', typeof actualHtml,
         typeof actualHtml === 'string' ? `length: ${actualHtml.length}` : '')
     }
     
     // Handle Response objects that weren't properly extracted
     if (actualHtml && typeof actualHtml === 'object') {
-      console.log('htmlExtractText: Resolved HTML is object, keys:', Object.keys(actualHtml))
+      debugLog('htmlExtractText: Resolved HTML is object, keys:', Object.keys(actualHtml))
       if ('text' in actualHtml && typeof actualHtml.text === 'function') {
-        console.error('htmlExtractText: ERROR - Found Response object! Should have been extracted by extractResponseText')
+        debugWarn('htmlExtractText: ERROR - Found Response object! Should have been extracted by extractResponseText')
         return ''
       } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
         actualHtml = actualHtml.text
@@ -1609,30 +1651,30 @@ const htmlExtractText = defineAtom(
     
     // Fallback: try to get from context directly
     if (!actualHtml || (typeof actualHtml === 'string' && actualHtml.length === 0)) {
-      console.log('htmlExtractText: Trying fallback from context...')
+      debugLog('htmlExtractText: Trying fallback from context...')
       const fallback = ctx.state?.html ?? ctx.vars?.html ?? ctx.state?.htmlValue ?? ctx.vars?.htmlValue
       if (typeof fallback === 'string' && fallback.length > 0) {
         actualHtml = fallback
-        console.log('htmlExtractText: Got HTML from fallback, length:', actualHtml.length)
+        debugLog('htmlExtractText: Got HTML from fallback, length:', actualHtml.length)
       }
     }
     
     if (!actualHtml) {
-      console.warn('htmlExtractText: No HTML content after all resolution attempts')
+      debugWarn('htmlExtractText: No HTML content after all resolution attempts')
       return ''
     }
     
     if (typeof actualHtml !== 'string') {
-      console.warn('htmlExtractText: HTML is not a string, converting. Type:', typeof actualHtml)
+      debugWarn('htmlExtractText: HTML is not a string, converting. Type:', typeof actualHtml)
       actualHtml = String(actualHtml)
     }
     
     if (actualHtml.length === 0) {
-      console.warn('htmlExtractText: Received empty HTML string')
+      debugWarn('htmlExtractText: Received empty HTML string')
       return ''
     }
     
-    console.log(`htmlExtractText: Processing HTML, length: ${actualHtml.length} chars`)
+    debugLog(`htmlExtractText: Processing HTML, length: ${actualHtml.length} chars`)
     return extractTextFromHTML(actualHtml)
   },
   { docs: 'Extract text content from HTML string', cost: 1 }
@@ -1645,19 +1687,12 @@ const htmlExtractText = defineAtom(
 const extractImagesFromHTMLAtom = defineAtom(
   'extractImagesFromHTML',
   s.object({ html: s.string, baseUrl: s.string }),
-  s.array(s.object({
-    url: s.string,
-    width: s.any,
-    height: s.any,
-    alt: s.any,
-    area: s.any,
-    size: s.any,
-  })),
+  s.array(imageInfoSchema),
   async ({ html, baseUrl }: { html: string; baseUrl: string }, ctx: any) => {
     // Debug: Log context state
-    console.log('extractImagesFromHTMLAtom: Input html type:', typeof html)
-    console.log('extractImagesFromHTMLAtom: Context state keys:', Object.keys(ctx.state || {}))
-    console.log('extractImagesFromHTMLAtom: Context vars keys:', Object.keys(ctx.vars || {}))
+    debugLog('extractImagesFromHTMLAtom: Input html type:', typeof html)
+    debugLog('extractImagesFromHTMLAtom: Context state keys:', Object.keys(ctx.state || {}))
+    debugLog('extractImagesFromHTMLAtom: Context vars keys:', Object.keys(ctx.vars || {}))
     
     // Ensure html is a string - handle cases where it might be an object or undefined
     let htmlString: string = ''
@@ -1666,26 +1701,26 @@ const extractImagesFromHTMLAtom = defineAtom(
     let actualHtml: any = html
     if (html && typeof html === 'object' && html !== null && '$kind' in html && html.$kind === 'arg') {
       const path = (html as any).path
-      console.log('extractImagesFromHTMLAtom: Got argument reference, resolving. Path:', path)
+      debugLog('extractImagesFromHTMLAtom: Got argument reference, resolving. Path:', path)
       // Try args first, then state (for .as() results), then vars
       actualHtml = ctx.args?.[path] ?? ctx.state?.[path] ?? ctx.vars?.[path]
-      console.log('extractImagesFromHTMLAtom: Resolved from:', 
+      debugLog('extractImagesFromHTMLAtom: Resolved from:', 
         ctx.args?.[path] !== undefined ? 'args' : 
         ctx.state?.[path] !== undefined ? 'state' : 
         ctx.vars?.[path] !== undefined ? 'vars' : 'none')
-      console.log('extractImagesFromHTMLAtom: Resolved HTML type:', typeof actualHtml, 
+      debugLog('extractImagesFromHTMLAtom: Resolved HTML type:', typeof actualHtml, 
         typeof actualHtml === 'string' ? `length: ${actualHtml.length}` : '')
     }
     
     // If we have a string, use it directly
     if (typeof actualHtml === 'string' && actualHtml.length > 0) {
       htmlString = actualHtml
-      console.log('extractImagesFromHTMLAtom: Using resolved string, length:', htmlString.length)
+      debugLog('extractImagesFromHTMLAtom: Using resolved string, length:', htmlString.length)
     } else if (actualHtml && typeof actualHtml === 'object') {
       // Handle Response objects or objects with text property
-      console.log('extractImagesFromHTMLAtom: Resolved HTML is object, keys:', Object.keys(actualHtml))
+      debugLog('extractImagesFromHTMLAtom: Resolved HTML is object, keys:', Object.keys(actualHtml))
       if ('text' in actualHtml && typeof actualHtml.text === 'function') {
-        console.error('extractImagesFromHTMLAtom: ERROR - Found Response object! Should have been extracted by extractResponseText')
+        debugWarn('extractImagesFromHTMLAtom: ERROR - Found Response object! Should have been extracted by extractResponseText')
         return []
       } else if ('text' in actualHtml && typeof actualHtml.text === 'string') {
         htmlString = actualHtml.text
@@ -1696,11 +1731,11 @@ const extractImagesFromHTMLAtom = defineAtom(
     
     // Fallback: try to get from context directly
     if (!htmlString || htmlString.length === 0) {
-      console.log('extractImagesFromHTMLAtom: Trying fallback from context...')
+      debugLog('extractImagesFromHTMLAtom: Trying fallback from context...')
       const fallback = ctx.state?.html ?? ctx.vars?.html ?? ctx.state?.htmlValue ?? ctx.vars?.htmlValue
       if (typeof fallback === 'string' && fallback.length > 0) {
         htmlString = fallback
-        console.log('extractImagesFromHTMLAtom: Got HTML from fallback, length:', htmlString.length)
+        debugLog('extractImagesFromHTMLAtom: Got HTML from fallback, length:', htmlString.length)
       }
     }
     
@@ -1718,13 +1753,13 @@ const extractImagesFromHTMLAtom = defineAtom(
     
     // Final validation
     if (!htmlString || htmlString.length === 0) {
-      console.warn('extractImagesFromHTMLAtom: No HTML content provided after all resolution attempts')
-      console.warn('extractImagesFromHTMLAtom: Available state:', JSON.stringify(Object.keys(ctx.state || {})))
-      console.warn('extractImagesFromHTMLAtom: Available vars:', JSON.stringify(Object.keys(ctx.vars || {})))
+      debugWarn('extractImagesFromHTMLAtom: No HTML content provided after all resolution attempts')
+      debugLog('extractImagesFromHTMLAtom: Available state:', JSON.stringify(Object.keys(ctx.state || {})))
+      debugLog('extractImagesFromHTMLAtom: Available vars:', JSON.stringify(Object.keys(ctx.vars || {})))
       return []
     }
     
-    console.log(`extractImagesFromHTMLAtom: Processing HTML, length: ${htmlString.length}, baseUrl: ${baseUrlString}`)
+    debugLog(`extractImagesFromHTMLAtom: Processing HTML, length: ${htmlString.length}, baseUrl: ${baseUrlString}`)
     return extractImagesFromHTML(htmlString, baseUrlString)
   },
   { docs: 'Extract image information from HTML string', cost: 5 }
@@ -1737,35 +1772,21 @@ const extractImagesFromHTMLAtom = defineAtom(
 const filterCandidateImagesAtom = defineAtom(
   'filterCandidateImages',
   s.object({ 
-    images: s.array(s.object({
-      url: s.string,
-      width: s.any,
-      height: s.any,
-      alt: s.any,
-      area: s.any,
-      size: s.any,
-    })),
-    maxCandidates: s.any
+    images: s.array(imageInfoSchema),
+    maxCandidates: s.any  // number | undefined - controls max images to return
   }),
-  s.array(s.object({
-    url: s.string,
-    width: s.any,
-    height: s.any,
-    alt: s.any,
-    area: s.any,
-    size: s.any,
-  })),
+  s.array(imageInfoSchema),
   async ({ images, maxCandidates = 3 }: { images: ImageInfo[]; maxCandidates?: number }, ctx: any) => {
     // Resolve argument references (check args first for values passed to vm.run())
     let actualImages = images
     if (images && typeof images === 'object' && '$kind' in images && images.$kind === 'arg') {
-      console.log('filterCandidateImages: Resolving images. Path:', images.path)
+      debugLog('filterCandidateImages: Resolving images. Path:', images.path)
       actualImages = ctx.args?.[images.path] || ctx.state?.[images.path] || ctx.vars?.[images.path] || []
-      console.log('filterCandidateImages: Resolved to array of length:', actualImages?.length || 0)
+      debugLog('filterCandidateImages: Resolved to array of length:', actualImages?.length || 0)
     }
     
     if (!Array.isArray(actualImages)) {
-      console.error('filterCandidateImages: images is not an array:', typeof actualImages)
+      debugWarn('filterCandidateImages: images is not an array:', typeof actualImages)
       return []
     }
     
@@ -1793,18 +1814,18 @@ const buildUserPrompt = defineAtom(
     // Get pageText from the variable store where we stored it
     // Try both vars and state (different agent-99 versions might use different locations)
     const pageText = ctx.state?.pageText || ctx.vars?.pageText || ''
-    console.log('buildUserPrompt: URL:', resolvedUrl)
-    console.log('buildUserPrompt: Retrieved pageText type:', typeof pageText, 'length:', pageText?.length || 0)
+    debugLog('buildUserPrompt: URL:', resolvedUrl)
+    debugLog('buildUserPrompt: Retrieved pageText type:', typeof pageText, 'length:', pageText?.length || 0)
     
     // Limit pageText to 3000 chars for token efficiency
     const limitedText = typeof pageText === 'string' ? pageText.substring(0, 3000) : String(pageText || '')
     
     // Validate that we have actual content - if pageText is empty, this indicates HTML extraction failed
     if (!limitedText || limitedText.trim().length === 0) {
-      console.warn(`buildUserPrompt: No page text extracted from ${resolvedUrl} - HTML extraction may have failed`)
-      console.warn('buildUserPrompt: pageText value:', pageText)
-      console.warn('buildUserPrompt: ctx.state keys:', Object.keys(ctx.state || {}))
-      console.warn('buildUserPrompt: ctx.vars keys:', Object.keys(ctx.vars || {}))
+      debugWarn(`buildUserPrompt: No page text extracted from ${resolvedUrl} - HTML extraction may have failed`)
+      debugLog('buildUserPrompt: pageText value:', pageText)
+      debugLog('buildUserPrompt: ctx.state keys:', Object.keys(ctx.state || {}))
+      debugLog('buildUserPrompt: ctx.vars keys:', Object.keys(ctx.vars || {}))
       // Return a prompt that explicitly states no content was found
       return `Generate alt-text for a link to this webpage: ${resolvedUrl}
 
@@ -1818,7 +1839,7 @@ Return your response as JSON with "altText" and "topic" fields.`
     }
     
     // Debug: Log first 200 chars of extracted text to verify content
-    console.log('buildUserPrompt: Sending to LLM - first 200 chars:', limitedText.substring(0, 200).replace(/\n/g, ' '))
+    debugLog('buildUserPrompt: Sending to LLM - first 200 chars:', limitedText.substring(0, 200).replace(/\n/g, ' '))
     
     return `Generate alt-text for a link to this webpage: ${resolvedUrl}
 
@@ -1841,12 +1862,12 @@ const llmPredictBatteryLongTimeout = defineAtom(
   s.object({
     system: s.string,
     user: s.string,
-    tools: s.array(s.any),
-    responseFormat: s.any,
+    tools: s.array(s.any),        // OpenAI-compatible tool definitions - structure varies
+    responseFormat: s.any,        // OpenAI-compatible response format (json_schema, etc.)
   }),
   s.object({
     content: s.string,
-    tool_calls: s.array(s.any),
+    tool_calls: s.array(s.any),   // OpenAI-compatible tool calls - structure varies
   }),
   async ({ system, user, tools, responseFormat }: any, ctx: any) => {
     const llmCap = ctx.capabilities.llm
@@ -1878,8 +1899,8 @@ const llmPredictBatteryLongTimeout = defineAtom(
     }
     
     // Debug: Log what we're actually sending to the LLM
-    console.log('llmPredictBattery: User prompt length:', resolvedUser.length, 'chars')
-    console.log('llmPredictBattery: First 100 chars:', resolvedUser.substring(0, 100).replace(/\n/g, ' '))
+    debugLog('llmPredictBattery: User prompt length:', resolvedUser.length, 'chars')
+    debugLog('llmPredictBattery: First 100 chars:', resolvedUser.substring(0, 100).replace(/\n/g, ' '))
     
     const resolvedTools = tools || undefined
     const resolvedFormat = responseFormat || undefined
@@ -1897,11 +1918,11 @@ const llmVisionBattery = defineAtom(
     system: s.string,
     userText: s.string,
     imageDataUri: s.string,
-    responseFormat: s.any,
+    responseFormat: s.any,        // OpenAI-compatible response format (json_schema, etc.)
   }),
   s.object({
     content: s.string,
-    tool_calls: s.array(s.any),
+    tool_calls: s.array(s.any),   // OpenAI-compatible tool calls - structure varies
   }),
   async ({ system, userText, imageDataUri, responseFormat }: any, ctx: any) => {
     const llmCap = ctx.capabilities.llm
@@ -1924,8 +1945,8 @@ const fetchImageDataAtom = defineAtom(
   s.object({
     size: s.number,
     base64: s.string,
-    width: s.any,
-    height: s.any,
+    width: s.any,   // number | undefined - image width if detected
+    height: s.any,  // number | undefined - image height if detected
   }),
   async ({ imageUrl }: { imageUrl: string }, ctx: any) => {
     // Use fetch capability (which should be provided via httpFetch atom in pipeline)
@@ -1962,42 +1983,21 @@ const fetchImageDataAtom = defineAtom(
 const processCandidateImagesAtom = defineAtom(
   'processCandidateImages',
   s.object({
-    candidates: s.array(s.object({
-      url: s.string,
-      width: s.any,
-      height: s.any,
-      alt: s.any,
-      area: s.any,
-      size: s.any,
-    })),
-    pageContext: s.any,
+    candidates: s.array(imageInfoSchema),
+    pageContext: s.any,  // { altText: string, topic: string } | undefined - page context for scoring
   }),
-  s.array(s.object({
-    img: s.object({
-      url: s.string,
-      width: s.any,
-      height: s.any,
-      alt: s.any,
-      area: s.any,
-      size: s.any,
-    }),
-    imageData: s.object({
-      size: s.number,
-      base64: s.string,
-    }),
-    score: s.number,
-  })),
+  s.array(scoredCandidateSchema),
   async ({ candidates, pageContext }: any, ctx: any) => {
     // Resolve argument references (check args first for values passed to vm.run())
     let actualCandidates = candidates
     if (candidates && typeof candidates === 'object' && '$kind' in candidates && candidates.$kind === 'arg') {
-      console.log('processCandidateImages: Resolving candidates. Path:', candidates.path)
+      debugLog('processCandidateImages: Resolving candidates. Path:', candidates.path)
       actualCandidates = ctx.args?.[candidates.path] || ctx.state?.[candidates.path] || ctx.vars?.[candidates.path] || []
-      console.log('processCandidateImages: Resolved to array of length:', actualCandidates?.length || 0)
+      debugLog('processCandidateImages: Resolved to array of length:', actualCandidates?.length || 0)
     }
     
     if (!Array.isArray(actualCandidates)) {
-      console.error('processCandidateImages: candidates is not an array:', typeof actualCandidates)
+      debugWarn('processCandidateImages: candidates is not an array:', typeof actualCandidates)
       return []
     }
     
@@ -2023,7 +2023,7 @@ const processCandidateImagesAtom = defineAtom(
           img.size = size
           return { img, imageData: { size, base64: dataUri }, error: null }
         } catch (error) {
-          console.warn(`Failed to fetch image ${img.url}:`, error)
+          debugWarn(`Failed to fetch image ${img.url}:`, error)
           return { img, imageData: null, error }
         }
       })
@@ -2099,15 +2099,8 @@ const scoreImageInterestingnessAtom = defineAtom(
   'scoreImageInterestingness',
   s.object({
     imageDataUri: s.string,
-    imageInfo: s.object({
-      url: s.string,
-      width: s.any,
-      height: s.any,
-      alt: s.any,
-      area: s.any,
-      size: s.any,
-    }),
-    pageContext: s.any,
+    imageInfo: imageInfoSchema,
+    pageContext: s.any,  // { altText: string, topic: string } | undefined - page context for scoring
   }),
   s.number,
   async ({ imageDataUri, imageInfo, pageContext }: any, ctx: any) => {
@@ -2436,7 +2429,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   
   // If still not found, check the raw result structure
   if (!altText && result.result) {
-    console.log('Debug - result structure:', JSON.stringify(result.result, null, 2))
+    debugLog('Debug - result structure:', JSON.stringify(result.result, null, 2))
   }
 
   return {

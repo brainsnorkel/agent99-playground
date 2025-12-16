@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Improved (2025-12-17) - Code Review Recommendations
+- **Added debug flag for logging**: Debug output now controlled by `AGENT99_DEBUG=1` or `DEBUG=1` environment variables
+  - Introduced `debugLog()` and `debugWarn()` functions that only output when debug is enabled
+  - All atom debug logging now uses these functions instead of direct `console.log`/`console.warn`
+  - CLI output remains unchanged (user-facing messages)
+- **Improved schema documentation**: Added comments to `s.any` fields documenting expected types
+  - Created reusable schemas: `imageInfoSchema`, `imageDataSchema`, `scoredCandidateSchema`
+  - Documented that tosijs-schema doesn't support optional/nullable types, so `s.any` is used with type annotations
+  - All OpenAI-compatible fields (tools, responseFormat, tool_calls) now have explanatory comments
+- **Marked `fetchImageData` as test utility**: Added comprehensive JSDoc explaining that this function:
+  - Uses direct `fetch()` outside the VM (for test convenience)
+  - Should prefer the `fetchImageData` atom for production use
+  - Is exported primarily for use in tests (example.test.ts)
+
 ### Fixed (2025-12-17) - Fuel Calculation Bug
 - **Fuel used was always showing the same value**: The `processUrl()` function runs 3 VM pipelines (page analysis, image processing, alt-text generation), but only the first pipeline's fuel was being captured
 - Now accumulates fuel from all VM runs:
