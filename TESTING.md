@@ -106,7 +106,8 @@ bun test --coverage
 1. **Basic Functionality**
    - [x] Can fetch a simple webpage using httpFetch atom
    - [x] Generates valid alt-text output
-   - [x] Alt-text is within 50-150 character range
+   - [x] Page alt-text is within 50-150 character range
+   - [x] Image alt-text is within 50-200 character range
    - [x] Topic is generated
    - [x] All operations execute within VM
 

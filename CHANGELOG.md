@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Fixed (2025-12-17) - Documentation Accuracy Review
+- **README.md**: Added missing `fetchImageData` atom to Custom Atoms list (was listed in QUICK_REFERENCE.md but not README)
+- **TESTING.md**: Clarified alt-text length ranges (page: 50-150 chars, image: 50-200 chars)
+- **config.ts**: Changed default LLM URL from private IP (`192.168.1.61`) to `localhost:1234` for standard LM Studio setup
+- **index.ts**: Centralized all LLM URL defaults to use `DEFAULT_LLM_URL` from config.ts instead of hardcoded values
+
+### Improved (2025-12-17) - Code Review Recommendations
+- **Added debug flag for logging**: Debug output now controlled by `AGENT99_DEBUG=1` or `DEBUG=1` environment variables
+  - Introduced `debugLog()` and `debugWarn()` functions that only output when debug is enabled
+  - All atom debug logging now uses these functions instead of direct `console.log`/`console.warn`
+  - CLI output remains unchanged (user-facing messages)
+- **Improved schema documentation**: Added comments to `s.any` fields documenting expected types
+  - Created reusable schemas: `imageInfoSchema`, `imageDataSchema`, `scoredCandidateSchema`
+  - Documented that tosijs-schema doesn't support optional/nullable types, so `s.any` is used with type annotations
+  - All OpenAI-compatible fields (tools, responseFormat, tool_calls) now have explanatory comments
+- **Marked `fetchImageData` as test utility**: Added comprehensive JSDoc explaining that this function:
+  - Uses direct `fetch()` outside the VM (for test convenience)
+  - Should prefer the `fetchImageData` atom for production use
+  - Is exported primarily for use in tests (example.test.ts)
+
+### Fixed (2025-12-17) - Fuel Calculation Bug
+- **Fuel used was always showing the same value**: The `processUrl()` function runs 3 VM pipelines (page analysis, image processing, alt-text generation), but only the first pipeline's fuel was being captured
+- Now accumulates fuel from all VM runs:
+  - Page analysis pipeline fuel
+  - Image processing pipeline fuel  
+  - Alt-text generation pipeline fuel
+- Initialized `fuelUsed` to 0 and use `+=` to accumulate instead of `=` assignment
+- Removed `fuelUsed = undefined` reset in error handler to preserve accumulated fuel
+
+### Added (2025-12-17) - URL Scheme Normalization
+- **Auto-prepend `https://`**: URLs without a scheme (e.g., `example.com`) now automatically get `https://` prepended
+- Implemented in both frontend (`src/index.html`) and server (`src/server.ts`) for redundancy
+- Users can now enter URLs like `google.com` without typing the full `https://google.com`
+
+### Changed (2025-12-17) - Relax Image Size Requirements
+- **`filterCandidateImages()`**: Relaxed minimum image size from 100x100 to 10x10
+  - Images must now be larger than 10x10 pixels (area > 100) to be considered
+  - This allows smaller but potentially interesting images to be processed
+
 ### Fixed (2025-12-16) - Code Review Session
 - **CRITICAL: `generateAltText()` was broken**: The function was using `.varGet({ key: 'response.text' })` which gets the method reference (`function text() { [native code] }`) instead of calling it. Now uses `extractResponseText` atom like `generateCombinedAltText()` to properly extract HTML content.
 - **Removed dead code**: Removed unused standalone `scoreImageInterestingness()` function (lines 294-375) - the atom version is used instead
