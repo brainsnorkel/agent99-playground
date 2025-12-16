@@ -139,13 +139,14 @@ export async function fetchImageData(imageUrl: string): Promise<{ size: number; 
 
 /**
  * Finds the largest image on a webpage and generates alt text using LLM vision
+ * Can optionally use page context to improve image alt-text generation
  * 
  * NOTE: This function currently uses direct API calls rather than agent-99 batteries
  * for vision processing. The image extraction and selection logic runs outside the VM,
  * and the vision API call is made directly. This could be refactored to use agent-99's
  * execution model for consistency with generateAltText().
  */
-export async function generateImageAltText(url: string, llmBaseUrl?: string) {
+export async function generateImageAltText(url: string, llmBaseUrl?: string, pageContext?: { altText: string; topic: string }) {
   // Fetch the webpage
   const response = await fetch(url)
   if (!response.ok) {
@@ -215,13 +216,26 @@ The alt-text should:
 
 Analyze the provided image carefully and generate appropriate alt-text. Return your response as JSON with "altText" and "description" fields.`
 
-  const userPrompt = `Generate alt-text for this image from the webpage: ${url}
+  let userPrompt = `Generate alt-text for this image from the webpage: ${url}
 
 Image URL: ${largestImage.url}
-${largestImage.alt ? `Existing alt attribute: ${largestImage.alt}` : 'No existing alt attribute'}
+${largestImage.alt ? `Existing alt attribute: ${largestImage.alt}` : 'No existing alt attribute'}`
+
+  // Add page context if provided to help with image description
+  if (pageContext) {
+    userPrompt += `
+
+Page Context:
+- Page Topic: ${pageContext.topic}
+- Page Alt-Text: ${pageContext.altText}
+
+Use this page context to better understand the image's role and relevance on the page.`
+  }
+
+  userPrompt += `
 
 Please analyze the image and provide a JSON response with:
-- "altText": A concise alt-text (50-200 characters)
+- "altText": A concise alt-text (50-200 characters) that considers the page context
 - "description": A more detailed description (optional)`
 
   const responseFormat = {
@@ -279,6 +293,41 @@ Please analyze the image and provide a JSON response with:
     imageWidth: largestImage.width,
     imageHeight: largestImage.height,
     imageSize: imageData.size,
+  }
+}
+
+/**
+ * Generates both page and image alt-text in a single operation
+ * First generates page alt-text, then uses that context to generate image alt-text
+ */
+export async function generateCombinedAltText(url: string, llmBaseUrl?: string) {
+  // First, generate page alt-text
+  const pageResult = await generateAltText(url, llmBaseUrl)
+  
+  // Then, generate image alt-text using page context
+  let imageResult
+  try {
+    imageResult = await generateImageAltText(url, llmBaseUrl, {
+      altText: pageResult.altText,
+      topic: pageResult.topic,
+    })
+  } catch (error: any) {
+    // If image processing fails (e.g., no images found), continue without image data
+    console.warn('Image processing failed:', error.message)
+    imageResult = null
+  }
+  
+  return {
+    url,
+    pageAltText: pageResult.altText,
+    pageTopic: pageResult.topic,
+    fuelUsed: pageResult.fuelUsed,
+    imageUrl: imageResult?.imageUrl,
+    imageAltText: imageResult?.altText,
+    imageDescription: imageResult?.description,
+    imageWidth: imageResult?.imageWidth,
+    imageHeight: imageResult?.imageHeight,
+    imageSize: imageResult?.imageSize,
   }
 }
 

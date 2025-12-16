@@ -1,20 +1,21 @@
 import { serve } from 'bun'
-import { generateAltText, generateImageAltText } from './index'
+import { generateCombinedAltText } from './index'
 
 interface QueryResult {
   id: string
   url: string
-  altText: string
-  topic?: string
-  fuelUsed?: number
   timestamp: number
-  // Image-specific fields
-  mode: 'page' | 'image'
+  // Page alt-text fields
+  pageAltText: string
+  pageTopic: string
+  fuelUsed?: number
+  // Image alt-text fields
   imageUrl?: string
+  imageAltText?: string
+  imageDescription?: string
   imageWidth?: number
   imageHeight?: number
   imageSize?: number
-  description?: string
 }
 
 // In-memory storage (in production, use a database)
@@ -65,7 +66,7 @@ serve({
     if (url.pathname === '/api/process' && req.method === 'POST') {
       try {
         const body = await req.json()
-        const { url: targetUrl, llmUrl, mode = 'page' } = body
+        const { url: targetUrl, llmUrl } = body
 
         if (!targetUrl) {
           return new Response(
@@ -83,36 +84,22 @@ serve({
           ? effectiveLLMUrl
           : `${effectiveLLMUrl}/v1`
 
-        // Process the URL based on mode
-        let queryResult: QueryResult
-
-        if (mode === 'image') {
-          // Image mode: find largest image and generate alt-text
-          const result = await generateImageAltText(targetUrl, finalLLMUrl)
-          queryResult = {
-            id: Date.now().toString(),
-            url: result.url,
-            altText: result.altText,
-            timestamp: Date.now(),
-            mode: 'image',
-            imageUrl: result.imageUrl,
-            imageWidth: result.imageWidth,
-            imageHeight: result.imageHeight,
-            imageSize: result.imageSize,
-            description: result.description,
-          }
-        } else {
-          // Page mode: generate alt-text for the page
-          const result = await generateAltText(targetUrl, finalLLMUrl)
-          queryResult = {
-            id: Date.now().toString(),
-            url: result.url,
-            altText: result.altText,
-            topic: result.topic,
-            fuelUsed: result.fuelUsed,
-            timestamp: Date.now(),
-            mode: 'page',
-          }
+        // Process the URL: generate both page and image alt-text
+        const result = await generateCombinedAltText(targetUrl, finalLLMUrl)
+        
+        const queryResult: QueryResult = {
+          id: Date.now().toString(),
+          url: result.url,
+          timestamp: Date.now(),
+          pageAltText: result.pageAltText,
+          pageTopic: result.pageTopic,
+          fuelUsed: result.fuelUsed,
+          imageUrl: result.imageUrl,
+          imageAltText: result.imageAltText,
+          imageDescription: result.imageDescription,
+          imageWidth: result.imageWidth,
+          imageHeight: result.imageHeight,
+          imageSize: result.imageSize,
         }
 
         // Add to history (at the beginning for newest first)

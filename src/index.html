@@ -233,24 +233,6 @@
       color: #333;
     }
 
-    .result-mode-badge {
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      margin-bottom: 8px;
-    }
-
-    .result-mode-badge.page {
-      background: #e3f2fd;
-      color: #1976d2;
-    }
-
-    .result-mode-badge.image {
-      background: #fff3e0;
-      color: #f57c00;
-    }
 
     .error {
       background: #fee;
@@ -311,12 +293,6 @@
         </div>
       </div>
 
-      <label for="mode-select">Processing Mode:</label>
-      <select id="mode-select" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; margin-bottom: 12px;">
-        <option value="page">Page Alt-Text (analyze page content)</option>
-        <option value="image">Image Alt-Text (find largest image)</option>
-      </select>
-
       <label for="url-input">Enter URL to scan:</label>
       <input
         type="url"
@@ -346,26 +322,29 @@
   </div>
 
   <script>
-    // Load saved settings
-    const savedLLMUrl = localStorage.getItem('llmUrl')
-    if (savedLLMUrl) {
-      document.getElementById('llm-url').value = savedLLMUrl
-    }
+    // Wait for DOM to be ready
+    document.addEventListener('DOMContentLoaded', function() {
+      // Load saved settings
+      const savedLLMUrl = localStorage.getItem('llmUrl')
+      if (savedLLMUrl) {
+        const llmUrlInput = document.getElementById('llm-url')
+        if (llmUrlInput) {
+          llmUrlInput.value = savedLLMUrl
+        }
+      }
 
-    const savedMode = localStorage.getItem('processingMode')
-    if (savedMode) {
-      const modeSelect = document.getElementById('mode-select') as HTMLSelectElement
-      modeSelect.value = savedMode
-    }
 
-    // Load history on page load
-    loadHistory()
+      // Load history on page load
+      loadHistory()
+    })
 
     function toggleSettings() {
       const content = document.getElementById('settings-content')
       const arrow = document.getElementById('settings-arrow')
-      content.classList.toggle('active')
-      arrow.textContent = content.classList.contains('active') ? '▲' : '▼'
+      if (content && arrow) {
+        content.classList.toggle('active')
+        arrow.textContent = content.classList.contains('active') ? '▲' : '▼'
+      }
     }
 
     async function processUrl() {
@@ -381,12 +360,7 @@
         return
       }
 
-      // Get selected mode
-      const modeSelect = document.getElementById('mode-select') as HTMLSelectElement
-      const mode = modeSelect.value
-
       // Save preferences to localStorage
-      localStorage.setItem('processingMode', mode)
       const llmUrl = llmUrlInput.value.trim()
       if (llmUrl) {
         localStorage.setItem('llmUrl', llmUrl)
@@ -404,7 +378,7 @@
         const response = await fetch('/api/process', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, llmUrl: llmUrl || null, mode }),
+          body: JSON.stringify({ url, llmUrl: llmUrl || null }),
         })
 
         const data = await response.json()
@@ -446,15 +420,11 @@
         }
 
         container.innerHTML = history.map(item => {
-          const modeBadge = item.mode === 'image' 
-            ? '<span class="result-mode-badge image">🖼️ Image Mode</span>'
-            : '<span class="result-mode-badge page">📄 Page Mode</span>'
-          
-          const imageSection = item.mode === 'image' && item.imageUrl ? `
+          const imageSection = item.imageUrl ? `
             <div class="result-image-container">
               <img 
                 src="${escapeHtml(item.imageUrl)}" 
-                alt="${escapeHtml(item.altText)}"
+                alt="${escapeHtml(item.imageAltText || item.pageAltText)}"
                 class="result-image-thumbnail"
                 onclick="window.open('${escapeHtml(item.imageUrl)}', '_blank')"
                 onerror="this.style.display='none'"
@@ -466,34 +436,38 @@
                 ${item.imageSize 
                   ? `<div><strong>Size:</strong> ${(item.imageSize / 1024).toFixed(2)} KB</div>` 
                   : ''}
-                ${item.description 
-                  ? `<div style="margin-top: 8px; font-style: italic; color: #555;">${escapeHtml(item.description)}</div>` 
-                  : ''}
               </div>
             </div>
           ` : ''
           
-          const topicSection = item.mode === 'page' && item.topic 
-            ? `<div class="result-topic">Topic: ${escapeHtml(item.topic)}</div>` 
+          const imageAltTextSection = item.imageAltText 
+            ? `<div class="result-alt-text" style="margin-top: 12px;">
+                <strong>Image Alt-Text:</strong><br>
+                ${escapeHtml(item.imageAltText)}
+              </div>`
             : ''
           
-          const metaSection = item.mode === 'page' && item.fuelUsed !== undefined
-            ? `<div class="result-meta">
-                <span>Fuel used: ${item.fuelUsed}</span>
-                <span>${new Date(item.timestamp).toLocaleString()}</span>
+          const imageDescriptionSection = item.imageDescription 
+            ? `<div style="margin-top: 8px; font-style: italic; color: #555; padding-left: 12px;">
+                ${escapeHtml(item.imageDescription)}
               </div>`
-            : `<div class="result-meta">
-                <span>${new Date(item.timestamp).toLocaleString()}</span>
-              </div>`
+            : ''
           
           return `
             <div class="result-item">
-              ${modeBadge}
               <div class="result-url">${escapeHtml(item.url)}</div>
-              ${topicSection}
+              <div class="result-topic">Topic: ${escapeHtml(item.pageTopic)}</div>
+              <div class="result-alt-text">
+                <strong>Page Alt-Text:</strong><br>
+                ${escapeHtml(item.pageAltText)}
+              </div>
               ${imageSection}
-              <div class="result-alt-text">${escapeHtml(item.altText)}</div>
-              ${metaSection}
+              ${imageAltTextSection}
+              ${imageDescriptionSection}
+              <div class="result-meta">
+                ${item.fuelUsed !== undefined ? `<span>Fuel used: ${item.fuelUsed}</span>` : ''}
+                <span>${new Date(item.timestamp).toLocaleString()}</span>
+              </div>
             </div>
           `
         }).join('')
@@ -517,9 +491,14 @@
     }
 
     // Allow Enter key to submit
-    document.getElementById('url-input').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        processUrl()
+    document.addEventListener('DOMContentLoaded', function() {
+      const urlInput = document.getElementById('url-input')
+      if (urlInput) {
+        urlInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            processUrl()
+          }
+        })
       }
     })
   </script>

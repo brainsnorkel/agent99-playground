@@ -5,7 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Feature: Image Alt-Text Generation
+## [Unreleased] - Feature: Combined Page and Image Alt-Text Generation
+
+### Added
+- `generateCombinedAltText()` function that generates both page and image alt-text in one operation
+- Page context is now used to improve image alt-text generation
+- Combined history entries showing both page alt-text and image alt-text with thumbnail
+- Single unified processing mode (removed separate page/image modes)
+
+### Changed
+- App now always generates both page and image alt-text for each URL
+- Image alt-text generation uses page context (topic and alt-text) for better accuracy
+- History entries now display:
+  - Page topic and alt-text
+  - Image thumbnail (if available)
+  - Image alt-text (generated with page context)
+  - Image description (if available)
+- Removed mode selector from UI - all processing is now combined
+- Updated `generateImageAltText()` to accept optional page context parameter
+
+### Technical Details
+- Page alt-text is generated first using agent-99 batteries
+- Page context (alt-text and topic) is passed to image processing
+- Image alt-text generation uses page context in the prompt for better relevance
+- If image processing fails (no images found), page alt-text is still returned
+
+## [Previous] - Feature: Image Alt-Text Generation
 
 ### Added
 - `generateImageAltText()` function to find the largest image on a webpage and generate alt-text using LLM vision
