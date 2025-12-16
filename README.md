@@ -6,6 +6,9 @@ This project scrapes a given URL and uses an LLM to generate a concise alt-text 
 
 ## Features
 
+- **Web App Interface**: Simple, modern web UI for URL processing
+- **LLM Settings**: Configurable LLM endpoint settings
+- **Query History**: View all processed URLs with results displayed newest first
 - **Web Scraping**: Uses agent-99's `httpFetch` atom to fetch webpage content
 - **LLM Summarization**: Uses `llmPredictBattery` atom to generate accessible alt-text summaries
 - **Type-Safe**: Built with TypeScript and agent-99's schema-based type system
@@ -14,7 +17,7 @@ This project scrapes a given URL and uses an LLM to generate a concise alt-text 
 ## Prerequisites
 
 - [Bun](https://bun.sh/) runtime (recommended) or Node.js
-- For local LLM support: [LM Studio](https://lmstudio.ai/) running on `http://localhost:1234`
+- For local LLM support: [LM Studio](https://lmstudio.ai/) running on your configured endpoint
 
 ## Installation
 
@@ -25,7 +28,25 @@ bun install
 
 ## Usage
 
-### Basic Usage
+### Web App (Recommended)
+
+Start the web server:
+
+```bash
+bun run dev
+```
+
+Then open your browser to `http://localhost:3000`
+
+The web app provides:
+- **Settings Panel**: Configure your LLM endpoint URL (collapsible)
+- **URL Input**: Enter any URL to scan and generate alt-text
+- **Results Display**: Newest results appear at the top
+- **Query History**: View all previous queries with timestamps and metadata
+
+### CLI Usage
+
+You can still use the CLI interface:
 
 ```bash
 bun run src/index.ts <url>
@@ -57,14 +78,79 @@ The entire workflow is defined as a type-safe chain using agent-99's builder API
 
 ## Configuration
 
-### LLM Setup (Local Development)
+### LLM Setup
 
-For local development, the project uses agent-99's battery capabilities which connect to LM Studio:
+The web app allows you to configure the LLM endpoint directly in the UI:
 
-1. Install and run [LM Studio](https://lmstudio.ai/)
-2. Start a local server on `http://localhost:1234`
-3. Load a model in LM Studio
-4. Run the script - it will automatically connect to the local LLM
+1. Click the "⚙️ LLM Settings" panel to expand it
+2. Enter your LLM base URL (e.g., `http://localhost:1234/v1` or `http://192.168.1.61:1234/v1`)
+3. The `/v1` suffix is automatically added if not present
+4. Settings are saved to browser localStorage
+
+**For Local Development with LM Studio:**
+
+Follow these step-by-step instructions to set up a local LLM:
+
+1. **Install LM Studio**
+   - Download from [LM Studio](https://lmstudio.ai/)
+   - Install and launch the application
+
+2. **Download a Model**
+   - In LM Studio, go to the "Search" tab
+   - Search for and download a compatible model (recommended: models with 3B-7B parameters for faster responses)
+   - Popular options: `llama-3.2-3b-instruct`, `phi-3-mini`, `mistral-7b-instruct`
+   - Wait for the download to complete
+
+3. **Load the Model**
+   - Go to the "Chat" tab in LM Studio
+   - Select your downloaded model from the dropdown
+   - The model will load into memory (this may take a moment)
+
+4. **Start the Local Server**
+   - Click on the "Local Server" tab in LM Studio (or use the menu: View → Local Server)
+   - Click "Start Server" button
+   - The server will start on `http://localhost:1234` by default
+   - You should see a green indicator showing the server is running
+   - **Important**: Keep LM Studio running while using this application
+
+5. **Verify Server is Running**
+   - Open a browser and navigate to `http://localhost:1234/v1/models`
+   - You should see a JSON response listing available models
+   - If you see an error, the server is not running correctly
+
+6. **Configure in the Application**
+   - In the web app, click "⚙️ LLM Settings" to expand the settings panel
+   - Enter your LLM base URL:
+     - For local: `http://localhost:1234` (the `/v1` suffix is added automatically)
+     - For remote: `http://192.168.1.61:1234` (if running on another machine)
+   - Settings are saved to browser localStorage
+
+**Troubleshooting LM Studio Setup:**
+
+- **Connection Refused Error**: 
+  - Ensure LM Studio is running and the server is started
+  - Check that the server is running on the correct port (default: 1234)
+  - Verify the URL in settings matches your server address
+
+- **Server Not Starting**:
+  - Make sure a model is loaded in the Chat tab
+  - Try restarting LM Studio
+  - Check if another application is using port 1234
+
+- **Slow Responses**:
+  - Use a smaller model (3B-7B parameters)
+  - Ensure you have sufficient RAM (models need 4-8GB+ free)
+  - Close other applications to free up resources
+
+- **Testing the Connection**:
+  ```bash
+  # Test if server is responding
+  curl http://localhost:1234/v1/models
+  
+  # Should return JSON with model information
+  ```
+
+**Default LLM URL:** `http://192.168.1.61:1234/v1` (can be changed in web app settings)
 
 ### Production Setup
 
@@ -84,7 +170,9 @@ const capabilities = {
 ```
 .
 ├── src/
-│   └── index.ts          # Main implementation
+│   ├── index.ts          # Core implementation (generateAltText function)
+│   ├── server.ts         # Web server and API endpoints
+│   └── index.html        # Web app frontend
 ├── package.json          # Dependencies
 ├── tsconfig.json         # TypeScript configuration
 ├── README.md            # This file

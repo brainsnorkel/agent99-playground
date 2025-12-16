@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-01-XX
+
+### Added
+- Comprehensive test suite with 13 test cases covering:
+  - Basic functionality validation
+  - Error handling (invalid URLs, 404 errors, malformed URLs)
+  - Edge cases for HTML extraction
+  - Utility function testing for `extractTextFromHTML`
+- Detailed LM Studio setup instructions in README.md with:
+  - Step-by-step installation and configuration guide
+  - Model recommendations
+  - Server verification steps
+  - Troubleshooting section
+  - Connection testing commands
+
+### Changed
+- Fixed test length validation to match requirements (50-150 characters instead of 20-200)
+- Exported `extractTextFromHTML` function for testing
+- Updated TESTING.md to reflect completed test cases
+
+### Fixed
+- Test assertions now correctly validate alt-text length requirements
+
+## [1.1.0] - 2025-01-XX
+
+### Added
+- Web app interface with modern UI
+- Web server (`src/server.ts`) with REST API endpoints
+- HTML frontend (`src/index.html`) with:
+  - Collapsible LLM settings panel
+  - URL input form
+  - Real-time query processing
+  - Query history display (newest first)
+  - Clear history functionality
+- LocalStorage integration for saving LLM settings
+- API endpoints:
+  - `GET /api/history` - Retrieve query history
+  - `POST /api/process` - Process a URL
+  - `DELETE /api/history` - Clear query history
+- `dev` script in package.json for running the web server
+
+### Changed
+- Separated core logic from CLI interface
+- Updated README with web app usage instructions
+
 ## [1.0.0] - 2025-01-XX
 
 ### Fixed

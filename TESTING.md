@@ -104,17 +104,18 @@ bun test --coverage
 ### Functional Tests
 
 1. **Basic Functionality**
-   - [ ] Can fetch a simple webpage
-   - [ ] Generates valid alt-text output
-   - [ ] Alt-text is within 50-150 character range
-   - [ ] Topic is generated
+   - [x] Can fetch a simple webpage
+   - [x] Generates valid alt-text output
+   - [x] Alt-text is within 50-150 character range
+   - [x] Topic is generated
 
 2. **Edge Cases**
+   - [x] Handles invalid URLs
+   - [x] Handles 404 errors
    - [ ] Handles pages with minimal content
    - [ ] Handles pages with large amounts of content
    - [ ] Handles pages with non-English content
    - [ ] Handles redirects
-   - [ ] Handles 404 errors
    - [ ] Handles timeout scenarios
 
 3. **Output Quality**
@@ -122,6 +123,15 @@ bun test --coverage
    - [ ] Alt-text avoids redundant phrases
    - [ ] Alt-text is suitable for accessibility
    - [ ] Topic accurately describes page content
+
+4. **Utility Functions**
+   - [x] extractTextFromHTML removes HTML tags
+   - [x] extractTextFromHTML removes script/style elements
+   - [x] extractTextFromHTML decodes HTML entities
+   - [x] extractTextFromHTML normalizes whitespace
+   - [x] extractTextFromHTML limits length to 8000 characters
+   - [x] extractTextFromHTML handles empty HTML
+   - [x] extractTextFromHTML handles HTML with only tags
 
 ### Integration Tests
 

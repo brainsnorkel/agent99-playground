@@ -13,7 +13,7 @@ import { s } from 'tosijs-schema'
  * Extracts text content from HTML string
  * Simple implementation that removes HTML tags and normalizes whitespace
  */
-function extractTextFromHTML(html: string): string {
+export function extractTextFromHTML(html: string): string {
   // Remove script and style elements
   let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
   text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
