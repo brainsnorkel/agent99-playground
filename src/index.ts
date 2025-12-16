@@ -26,6 +26,11 @@ interface ImageInfo {
  * Simple implementation that removes HTML tags and normalizes whitespace
  */
 export function extractTextFromHTML(html: string): string {
+  // Handle undefined/null input
+  if (!html || typeof html !== 'string') {
+    return ''
+  }
+  
   // Remove script and style elements
   let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
   text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -239,85 +244,236 @@ export async function fetchImageData(imageUrl: string): Promise<{ size: number; 
 }
 
 /**
- * Finds the largest image on a webpage and generates alt text using LLM vision
+ * Scores an image for "interestingness" using LLM vision analysis
+ * Returns a score from 0-100 indicating how interesting/informative the image is
+ */
+async function scoreImageInterestingness(
+  imageDataUri: string,
+  imageInfo: ImageInfo,
+  pageContext: { altText: string; topic: string } | undefined,
+  llmBaseUrl: string
+): Promise<number> {
+  const systemPrompt = `You are an image analysis expert. Your task is to score images on a scale of 0-100 for how "interesting" or informative they are.
+
+Consider these factors:
+- Visual complexity and content richness (charts, diagrams, photos with detail > simple icons)
+- Informative value (does it convey meaningful information vs being purely decorative?)
+- Relevance to typical webpage content (main content images > decorative elements)
+- Presence of text, data visualizations, or complex scenes
+- Overall visual appeal and engagement
+
+Score guidelines:
+- 0-20: Simple icons, logos, decorative elements, tracking pixels
+- 21-40: Simple graphics, basic illustrations
+- 41-60: Standard photos, moderate complexity
+- 61-80: Rich content images, charts, diagrams, detailed photos
+- 81-100: Highly informative images, complex data visualizations, key content images
+
+Return your response as JSON with a single "score" field (0-100).`
+
+  let userPrompt = `Score this image for interestingness:
+
+Image URL: ${imageInfo.url}
+${imageInfo.alt ? `Alt text: ${imageInfo.alt}` : 'No alt text available'}
+${imageInfo.width && imageInfo.height ? `Dimensions: ${imageInfo.width}x${imageInfo.height}` : ''}`
+
+  if (pageContext) {
+    userPrompt += `
+
+Page Context:
+- Page Topic: ${pageContext.topic}
+- Page Description: ${pageContext.altText}
+
+Consider how relevant and informative this image is in the context of this page.`
+  }
+
+  userPrompt += `
+
+Return JSON with "score" field (0-100).`
+
+  const responseFormat = {
+    type: 'json_schema',
+    json_schema: {
+      name: 'interestingness_score',
+      schema: {
+        type: 'object',
+        properties: {
+          score: {
+            type: 'number',
+            description: 'Interestingness score from 0-100',
+            minimum: 0,
+            maximum: 100,
+          },
+        },
+        required: ['score'],
+      },
+    },
+  }
+
+  try {
+    const llmResponse = await predictWithVision(
+      llmBaseUrl,
+      systemPrompt,
+      userPrompt,
+      imageDataUri,
+      responseFormat
+    )
+
+    const parsed = JSON.parse(llmResponse.content)
+    return parsed.score || 0
+  } catch (error) {
+    console.warn(`Failed to score image ${imageInfo.url}:`, error)
+    // Fallback: use size/area as a proxy for interestingness
+    if (imageInfo.area) return Math.min(50, imageInfo.area / 10000) // Cap at 50 for fallback
+    if (imageInfo.size) return Math.min(50, imageInfo.size / 100000) // Cap at 50 for fallback
+    return 0
+  }
+}
+
+/**
+ * Filters images to those larger than icon size and limits to top candidates
+ * Icon size threshold: area > 10000 (roughly 100x100) or width > 100 and height > 100
+ */
+function filterCandidateImages(images: ImageInfo[], maxCandidates: number = 3): ImageInfo[] {
+  // Filter to images larger than icon size
+  const candidates = images.filter(img => {
+    // If we have area, use that (area > 10000 = roughly 100x100)
+    if (img.area && img.area > 10000) return true
+    // If we have both width and height, check both
+    if (img.width && img.height && img.width > 100 && img.height > 100) return true
+    // If we only have width or height, check if it's substantial
+    if (img.width && img.width > 200) return true
+    if (img.height && img.height > 200) return true
+    // If no dimensions, include it (we'll check file size later)
+    if (!img.width && !img.height) return true
+    return false
+  })
+
+  // Sort by area (descending) or width, then take top candidates
+  const sorted = candidates.sort((a, b) => {
+    if (a.area && b.area) return b.area - a.area
+    if (a.area) return -1
+    if (b.area) return 1
+    if (a.width && b.width) return b.width - a.width
+    if (a.width) return -1
+    if (b.width) return 1
+    return 0
+  })
+
+  return sorted.slice(0, maxCandidates)
+}
+
+/**
+ * Finds the most interesting image on a webpage and generates alt text using LLM vision
+ * Scores all candidate images for interestingness and selects the highest-scoring one
  * Can optionally use page context to improve image alt-text generation
  * 
- * NOTE: This function currently uses direct API calls rather than agent-99 batteries
- * for vision processing. The image extraction and selection logic runs outside the VM,
- * and the vision API call is made directly. This could be refactored to use agent-99's
- * execution model for consistency with generateAltText().
+ * Uses agent-99's VM execution model with full pipeline for all operations,
+ * ensuring consistency with the rest of the codebase.
  */
 export async function generateImageAltText(url: string, llmBaseUrl?: string, pageContext?: { altText: string; topic: string }) {
-  // Fetch the webpage
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`)
-  }
-  const html = await response.text()
-  
-  // Extract all images
-  const images = extractImagesFromHTML(html, url)
-  
-  if (images.length === 0) {
-    // Try to provide helpful debugging info
-    const hasImgTag = html.includes('<img') || html.toLowerCase().includes('<img')
-    const hasPictureTag = html.includes('<picture') || html.toLowerCase().includes('<picture')
-    const hasImageMentions = (html.match(/image/gi) || []).length
-    
-    let errorMsg = 'No images found on the page.'
-    if (!hasImgTag && !hasPictureTag) {
-      errorMsg += ' The page does not appear to contain <img> or <picture> tags in the initial HTML. This may indicate that images are loaded via JavaScript, CSS background images, or other dynamic methods that require browser rendering.'
-    } else if (hasImageMentions > 0) {
-      errorMsg += ` The page mentions "image" ${hasImageMentions} time(s) but no extractable image tags were found.`
-    }
-    
-    throw new Error(errorMsg)
-  }
-  
-  console.log(`Found ${images.length} image(s) on the page`)
-  
-  // Find the largest image
-  // Priority: area (width * height) > size > first image
-  let largestImage: ImageInfo | null = null
-  let maxArea = 0
-  let maxSize = 0
-  
-  // First, try to find by area (dimensions)
-  for (const img of images) {
-    if (img.area && img.area > maxArea) {
-      maxArea = img.area
-      largestImage = img
-    }
-  }
-  
-  // If no dimensions available, fetch images to get their file sizes
-  if (!largestImage || !largestImage.area) {
-    for (const img of images) {
-      try {
-        const imageData = await fetchImageData(img.url)
-        img.size = imageData.size
-        
-        if (imageData.size > maxSize) {
-          maxSize = imageData.size
-          largestImage = img
-        }
-      } catch (error) {
-        console.warn(`Failed to fetch image ${img.url}:`, error)
-        // Continue with other images
-      }
-    }
-  }
-  
-  if (!largestImage) {
-    throw new Error('Could not determine largest image')
-  }
-  
-  // Fetch the largest image data
-  const imageData = await fetchImageData(largestImage.url)
-  
-  // Use agent-99 VM with vision battery to describe the image
   const vm = createVM()
   const b = vm.A99
+  
+  // Build the complete pipeline within the VM
+  const logic = b
+    // Step 1: Fetch the webpage using httpFetch atom
+    .httpFetch({ url: A99.args('url') })
+    .as('response')
+    .varGet({ key: 'response.text' })
+    .as('html')
+    // Step 2: Extract images from HTML
+    .extractImagesFromHTML({ 
+      html: A99.args('html'), 
+      baseUrl: A99.args('url') 
+    })
+    .as('images')
+    // Step 3: Filter to candidate images
+    .filterCandidateImages({ 
+      images: A99.args('images'), 
+      maxCandidates: 3 
+    })
+    .as('candidates')
+    // Step 4: Process candidates (fetch and score in parallel)
+    .processCandidateImages({
+      candidates: A99.args('candidates'),
+      pageContext: pageContext ? A99.args('pageContext') : undefined,
+    })
+    .as('scoredCandidates')
+    // Step 5: Return scored candidates (we'll select best outside pipeline for now)
+    .return(
+      s.object({
+        candidates: s.array(s.object({
+          img: s.object({
+            url: s.string,
+            width: s.any,
+            height: s.any,
+            alt: s.any,
+            area: s.any,
+            size: s.any,
+          }),
+          imageData: s.object({
+            size: s.number,
+            base64: s.string,
+          }),
+          score: s.number,
+        })),
+      })
+    )
+  
+  // Compile to AST
+  const ast = logic.toJSON()
+  
+  // Execute in VM with capabilities
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
+  const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
+  const customCapabilities = finalLlmUrl 
+    ? createCustomCapabilities(finalLlmUrl)
+    : batteries
+  
+  // Provide fetch capability for httpFetch atom
+  const capabilitiesWithFetch = {
+    ...customCapabilities,
+    fetch: customCapabilities.fetch || batteries.fetch || fetch,
+  }
+  
+  let pipelineResult
+  try {
+    pipelineResult = await vm.run(
+      ast,
+      { 
+        url, 
+        pageContext: pageContext || undefined 
+      },
+      {
+        fuel: 50000, // Higher fuel for image processing
+        capabilities: capabilitiesWithFetch,
+      }
+    )
+  } catch (vmError: any) {
+    console.error('VM execution failed:', vmError.message)
+    throw vmError
+  }
+  
+  const scoredCandidates = pipelineResult?.result?.candidates || []
+  
+  if (scoredCandidates.length === 0) {
+    throw new Error('No candidate images found or processed')
+  }
+  
+  // Select the most interesting image (highest score)
+  const mostInteresting = scoredCandidates.reduce((best: any, current: any) => 
+    current.score > best.score ? current : best
+  )
+  
+  console.log(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
+  
+  const imageData = mostInteresting.imageData
+  const mostInterestingImage = mostInteresting.img
+  
+  // Step 6: Generate alt-text for the selected image using vision battery
+  const altTextVm = createVM()
+  const altTextB = altTextVm.A99
   
   const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
 
@@ -333,8 +489,8 @@ Analyze the provided image carefully and generate appropriate alt-text. Return y
 
   let userPrompt = `Generate alt-text for this image from the webpage: ${url}
 
-Image URL: ${largestImage.url}
-${largestImage.alt ? `Existing alt attribute: ${largestImage.alt}` : 'No existing alt attribute'}`
+Image URL: ${mostInterestingImage.url}
+${mostInterestingImage.alt ? `Existing alt attribute: ${mostInterestingImage.alt}` : 'No existing alt attribute'}`
 
   // Add page context if provided to help with image description
   if (pageContext) {
@@ -374,71 +530,113 @@ Please analyze the image and provide a JSON response with:
     },
   }
   
-  // Call vision API directly (not using agent-99 batteries currently)
-  // TODO: Refactor to use agent-99's execution model for consistency
-  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
-  const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
+  // Build the agent logic chain using vision battery within VM
+  const altTextLogic = altTextB
+    .llmVisionBattery({
+      system: systemPrompt,
+      userText: userPrompt,
+      imageDataUri: imageData.base64,
+      responseFormat,
+    })
+    .as('summary')
+    .varGet({ key: 'summary.content' })
+    .as('jsonContent')
+    .jsonParse({ str: 'jsonContent' })
+    .as('parsed')
+    .varSet({ key: 'altText', value: 'parsed.altText' })
+    .varSet({ key: 'description', value: 'parsed.description' })
+    .return(
+      s.object({
+        altText: s.string,
+        description: s.any, // Optional field - can be string or undefined
+      })
+    )
   
-  const llmResponse = await predictWithVision(
-    finalLlmUrl,
-    systemPrompt,
-    userPrompt,
-    imageData.base64,
-    responseFormat
-  )
+  // Compile to AST
+  const altTextAst = altTextLogic.toJSON()
   
-  // Parse the JSON response
+  // Execute in VM with capabilities
+  const altTextCapabilities = finalLlmUrl 
+    ? createCustomCapabilities(finalLlmUrl)
+    : batteries
+  
+  let altTextVmResult
   let altText: string | undefined
   let description: string | undefined
   
   try {
-    const parsed = JSON.parse(llmResponse.content)
-    altText = parsed.altText
-    description = parsed.description
-  } catch {
-    // If not JSON, try to extract from content
-    altText = llmResponse.content
+    altTextVmResult = await altTextVm.run(
+      altTextAst,
+      {},
+      {
+        fuel: 10000,
+        capabilities: altTextCapabilities,
+      }
+    )
+    
+    // Parse the VM result
+    altText = altTextVmResult?.result?.altText
+    description = altTextVmResult?.result?.description
+    
+    // If not found, try parsing from content field
+    if (!altText && altTextVmResult?.result?.summary?.content) {
+      try {
+        const parsed = JSON.parse(altTextVmResult.result.summary.content)
+        altText = parsed.altText
+        description = parsed.description
+      } catch {
+        // If not JSON, try to extract from content
+        altText = altTextVmResult.result.summary.content
+      }
+    }
+  } catch (vmError: any) {
+    console.error('VM execution failed for alt-text generation:', vmError.message)
+    console.error('VM error stack:', vmError.stack)
+    // Fallback to empty values
+    altText = undefined
+    description = undefined
   }
   
   return {
     url,
-    imageUrl: largestImage.url,
-    altText: altText || largestImage.alt || 'Unable to generate alt-text',
+    imageUrl: mostInterestingImage.url,
+    altText: altText || mostInterestingImage.alt || 'Unable to generate alt-text',
     description: description || undefined,
-    imageWidth: largestImage.width,
-    imageHeight: largestImage.height,
+    imageWidth: mostInterestingImage.width,
+    imageHeight: mostInterestingImage.height,
     imageSize: imageData.size,
   }
 }
 
 /**
  * Generates both page and image alt-text in a single operation
- * Fetches the page once, extracts images and text, then generates both alt-texts
- * This ensures we work with the same HTML and is more efficient
+ * Uses a complete VM pipeline for all operations, ensuring consistency
+ * and following agent-99's "agents-as-data" principle
  */
 export async function generateCombinedAltText(url: string, llmBaseUrl?: string) {
-  // Step 1: Fetch the webpage once
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`)
-  }
-  const html = await response.text()
-  
-  // Step 2: Extract images from HTML
-  const images = extractImagesFromHTML(html, url)
-  console.log(`Found ${images.length} image(s) on the page`)
-  if (images.length > 0) {
-    console.log('Image URLs found:', images.map(img => ({ url: img.url, width: img.width, height: img.height, area: img.area })))
-  }
-  
-  // Step 3: Extract text content for page alt-text generation
-  const pageText = extractTextFromHTML(html)
-  
-  // Step 4: Generate page alt-text and topic using LLM
   const vm = createVM()
   const b = vm.A99
   
-  const pageLogic = b
+  // Build the complete pipeline within the VM
+  const logic = b
+    // Step 1: Fetch the webpage using httpFetch atom
+    .httpFetch({ url: A99.args('url') })
+    .as('response')
+    .varGet({ key: 'response.text' })
+    .as('html')
+    // Step 2: Extract images and text in parallel (store both)
+    .extractImagesFromHTML({ 
+      html: A99.args('html'), 
+      baseUrl: A99.args('url') 
+    })
+    .as('images')
+    .htmlExtractText({ html: A99.args('html') })
+    .as('pageText')
+    // Step 3: Store pageText for prompt construction
+    .varSet({ key: 'pageText', value: 'pageText' })
+    // Step 4: Generate page alt-text and topic using LLM
+    .buildUserPrompt({ url: A99.args('url') })
+    .as('userPrompt')
     .llmPredictBattery({
       system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
 The alt-text should:
@@ -449,13 +647,7 @@ The alt-text should:
 - Focus on what the user would find on the page
 
 You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
-      user: `Generate alt-text for a link to this webpage: ${url}
-
-Here is the extracted text content from the webpage:
-
-${pageText.substring(0, 3000)}
-
-Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`,
+      user: A99.args('userPrompt'),
       responseFormat: {
         type: 'json_schema',
         json_schema: {
@@ -482,114 +674,149 @@ Analyze this content and generate a concise alt-text summary suitable for access
     .as('jsonContent')
     .jsonParse({ str: 'jsonContent' })
     .as('parsed')
-    .varSet({ key: 'altText', value: 'parsed.altText' })
-    .varSet({ key: 'topic', value: 'parsed.topic' })
+    .varSet({ key: 'pageAltText', value: 'parsed.altText' })
+    .varSet({ key: 'pageTopic', value: 'parsed.topic' })
+    // Return page results and images for further processing
     .return(
       s.object({
-        altText: s.string,
-        topic: s.string,
+        pageAltText: s.string,
+        pageTopic: s.string,
+        images: s.array(s.object({
+          url: s.string,
+          width: s.any,
+          height: s.any,
+          alt: s.any,
+          area: s.any,
+          size: s.any,
+        })),
       })
     )
   
-  const pageAst = pageLogic.toJSON()
+  // Compile to AST
+  const ast = logic.toJSON()
+  
+  // Execute in VM with capabilities
   const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
     : batteries
   
-  const pageResult = await vm.run(
-    pageAst,
-    {},
-    {
-      fuel: 10000,
-      capabilities: customCapabilities,
-    }
-  )
-  
-  // Parse page result
-  let pageAltText = pageResult.result?.altText
-  let pageTopic = pageResult.result?.topic
-  
-  if (!pageAltText && pageResult.result?.summary?.content) {
-    try {
-      const parsed = JSON.parse(pageResult.result.summary.content)
-      pageAltText = parsed.altText
-      pageTopic = parsed.topic
-    } catch {
-      pageAltText = pageResult.result.summary.content
-    }
+  // Provide fetch capability for httpFetch atom
+  const capabilitiesWithFetch = {
+    ...customCapabilities,
+    fetch: customCapabilities.fetch || batteries.fetch || fetch,
   }
   
-  // Step 5: Find largest image and generate image alt-text (if images found)
+  let pipelineResult
+  let pageAltText: string | undefined
+  let pageTopic: string | undefined
+  let fuelUsed: number | undefined
+  
+  try {
+    pipelineResult = await vm.run(
+      ast,
+      { url },
+      {
+        fuel: 50000, // Higher fuel for combined processing
+        capabilities: capabilitiesWithFetch,
+      }
+    )
+    
+    fuelUsed = pipelineResult?.fuelUsed
+    pageAltText = pipelineResult?.result?.pageAltText
+    pageTopic = pipelineResult?.result?.pageTopic
+    const images = pipelineResult?.result?.images || []
+    
+    console.log('Pipeline result - pageAltText:', pageAltText, 'pageTopic:', pageTopic)
+    console.log(`Found ${images.length} image(s) on the page`)
+  } catch (vmError: any) {
+    console.error('VM execution failed:', vmError.message)
+    console.error('VM error stack:', vmError.stack)
+    pageAltText = undefined
+    pageTopic = undefined
+    fuelUsed = undefined
+  }
+  
+  // Step 5: Process images using VM pipeline (if images found)
   let imageResult = null
+  const images = pipelineResult?.result?.images || []
   if (images.length > 0) {
     try {
-      // Find the largest image
-      let largestImage: ImageInfo | null = null
-      let maxArea = 0
-      let maxWidth = 0
-      let maxSize = 0
+      // Use VM pipeline for image processing
+      const imageVm = createVM()
+      const imageB = imageVm.A99
       
-      // First, try to find by area (dimensions - width * height)
-      console.log('Selecting largest image by area...')
-      for (const img of images) {
-        if (img.area && img.area > maxArea) {
-          maxArea = img.area
-          largestImage = img
-          console.log(`  Found image with area ${img.area}: ${img.url}`)
-        }
-      }
+      const imageLogic = imageB
+        // Filter candidates
+        .filterCandidateImages({
+          images: A99.args('images'),
+          maxCandidates: 3,
+        })
+        .as('candidates')
+        // Process candidates (fetch and score)
+        .processCandidateImages({
+          candidates: A99.args('candidates'),
+          pageContext: pageAltText && pageTopic ? {
+            altText: pageAltText,
+            topic: pageTopic,
+          } : undefined,
+        })
+        .as('scoredCandidates')
+        // Return scored candidates
+        .return(
+          s.object({
+            candidates: s.array(s.object({
+              img: s.object({
+                url: s.string,
+                width: s.any,
+                height: s.any,
+                alt: s.any,
+                area: s.any,
+                size: s.any,
+              }),
+              imageData: s.object({
+                size: s.number,
+                base64: s.string,
+              }),
+              score: s.number,
+            })),
+          })
+        )
       
-      // If no area available, try to find by width alone (for images with width but no height)
-      if (!largestImage) {
-        console.log('No image with area found, trying by width...')
-        for (const img of images) {
-          if (img.width && img.width > maxWidth) {
-            maxWidth = img.width
-            largestImage = img
-            console.log(`  Selected image by width ${img.width}: ${img.url}`)
-          }
-        }
-      }
+      const imageAst = imageLogic.toJSON()
       
-      // If still no image selected, fetch images to get their file sizes
-      if (!largestImage) {
-        console.log('No image selected by dimensions, trying file size...')
-        for (const img of images) {
-          try {
-            const imageData = await fetchImageData(img.url)
-            img.size = imageData.size
-            
-            if (imageData.size > maxSize) {
-              maxSize = imageData.size
-              largestImage = img
-            }
-          } catch (error) {
-            console.warn(`Failed to fetch image ${img.url}:`, error)
-            // Continue with other images
-          }
-        }
-      }
-      
-      // If still no image, just use the first one
-      if (!largestImage && images.length > 0) {
-        console.log('No image selected by size, using first image')
-        largestImage = images[0]
-      }
-      
-      if (!largestImage) {
-        throw new Error('Could not determine largest image from the extracted images')
-      }
-      
-      console.log(`Selected largest image: ${largestImage.url} (${largestImage.width || '?'}x${largestImage.height || '?'}, area: ${largestImage.area || 'unknown'}, size: ${largestImage.size || 'unknown'} bytes)`)
-      
-      // Fetch the largest image data
+      let imagePipelineResult
       try {
-        const imageData = await fetchImageData(largestImage.url)
+        imagePipelineResult = await imageVm.run(
+          imageAst,
+          { images },
+          {
+            fuel: 50000,
+            capabilities: capabilitiesWithFetch,
+          }
+        )
         
-        // Generate image alt-text using page context
-        const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
+        const scoredCandidates = imagePipelineResult?.result?.candidates || []
+        
+        if (scoredCandidates.length === 0) {
+          console.log('No candidate images processed')
+        } else {
+          // Find the most interesting image
+          const mostInteresting = scoredCandidates.reduce((best: any, current: any) => 
+            current.score > best.score ? current : best
+          )
+          
+          console.log(`Selected most interesting image: ${mostInteresting.img.url} (score: ${mostInteresting.score})`)
+          
+          const mostInterestingImage = mostInteresting.img
+          const imageData = mostInteresting.imageData
+          
+          // Generate image alt-text using VM pipeline
+          const altTextVm = createVM()
+          const altTextB = altTextVm.A99
+          
+          const systemPrompt = `You are an accessibility expert specializing in image description. Your task is to generate concise, descriptive alt-text for images that would be suitable for screen readers and accessibility purposes.
 
 The alt-text should:
 - Be 50-200 characters long
@@ -601,10 +828,10 @@ The alt-text should:
 
 Analyze the provided image carefully and generate appropriate alt-text. Return your response as JSON with "altText" and "description" fields.`
 
-        const userPrompt = `Generate alt-text for this image from the webpage: ${url}
+          const userPrompt = `Generate alt-text for this image from the webpage: ${url}
 
-Image URL: ${largestImage.url}
-${largestImage.alt ? `Existing alt attribute: ${largestImage.alt}` : 'No existing alt attribute'}
+Image URL: ${mostInterestingImage.url}
+${mostInterestingImage.alt ? `Existing alt attribute: ${mostInterestingImage.alt}` : 'No existing alt attribute'}
 
 Page Context:
 - Page Topic: ${pageTopic || 'Unknown'}
@@ -616,80 +843,159 @@ Please analyze the image and provide a JSON response with:
 - "altText": A concise alt-text (50-200 characters) that considers the page context
 - "description": A more detailed description (optional)`
 
-        const responseFormat = {
-          type: 'json_schema',
-          json_schema: {
-            name: 'image_alt_text_result',
-            schema: {
-              type: 'object',
-              properties: {
-                altText: {
-                  type: 'string',
-                  description: 'The alt-text suitable for this image (50-200 characters)',
+          const responseFormat = {
+            type: 'json_schema',
+            json_schema: {
+              name: 'image_alt_text_result',
+              schema: {
+                type: 'object',
+                properties: {
+                  altText: {
+                    type: 'string',
+                    description: 'The alt-text suitable for this image (50-200 characters)',
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'A more detailed description of the image (optional, for context)',
+                  },
                 },
-                description: {
-                  type: 'string',
-                  description: 'A more detailed description of the image (optional, for context)',
-                },
+                required: ['altText'],
               },
-              required: ['altText'],
             },
-          },
+          }
+          
+          const altTextLogic = altTextB
+            .llmVisionBattery({
+              system: systemPrompt,
+              userText: userPrompt,
+              imageDataUri: imageData.base64,
+              responseFormat,
+            })
+            .as('summary')
+            .varGet({ key: 'summary.content' })
+            .as('jsonContent')
+            .jsonParse({ str: 'jsonContent' })
+            .as('parsed')
+            .varSet({ key: 'altText', value: 'parsed.altText' })
+            .varSet({ key: 'description', value: 'parsed.description' })
+            .return(
+              s.object({
+                altText: s.string,
+                description: s.any,
+              })
+            )
+          
+          const altTextAst = altTextLogic.toJSON()
+          
+          let imageAltText: string | undefined
+          let imageDescription: string | undefined
+          
+          try {
+            const altTextResult = await altTextVm.run(
+              altTextAst,
+              {},
+              {
+                fuel: 10000,
+                capabilities: customCapabilities,
+              }
+            )
+            
+            imageAltText = altTextResult?.result?.altText
+            imageDescription = altTextResult?.result?.description
+            
+            if (!imageAltText && altTextResult?.result?.summary?.content) {
+              try {
+                const parsed = JSON.parse(altTextResult.result.summary.content)
+                imageAltText = parsed.altText
+                imageDescription = parsed.description
+              } catch {
+                imageAltText = altTextResult.result.summary.content
+              }
+            }
+          } catch (vmError: any) {
+            console.error('VM execution failed for image alt-text:', vmError.message)
+            imageAltText = undefined
+            imageDescription = undefined
+          }
+          
+          imageResult = {
+            imageUrl: mostInterestingImage.url,
+            altText: imageAltText || mostInterestingImage.alt || 'Unable to generate alt-text',
+            description: imageDescription || undefined,
+            imageWidth: mostInterestingImage.width,
+            imageHeight: mostInterestingImage.height,
+            imageSize: imageData.size,
+          }
         }
-        
-        const llmResponse = await predictWithVision(
-          finalLlmUrl,
-          systemPrompt,
-          userPrompt,
-          imageData.base64,
-          responseFormat
-        )
-        
-        // Parse the JSON response
-        let imageAltText: string | undefined
-        let imageDescription: string | undefined
-        
-        try {
-          const parsed = JSON.parse(llmResponse.content)
-          imageAltText = parsed.altText
-          imageDescription = parsed.description
-        } catch {
-          imageAltText = llmResponse.content
-        }
-        
-        imageResult = {
-          imageUrl: largestImage.url,
-          altText: imageAltText || largestImage.alt || 'Unable to generate alt-text',
-          description: imageDescription || undefined,
-          imageWidth: largestImage.width,
-          imageHeight: largestImage.height,
-          imageSize: imageData.size,
-        }
-      } catch (fetchError: any) {
-        console.error(`Failed to fetch image data for ${largestImage.url}:`, fetchError.message)
-        throw fetchError
+      } catch (imagePipelineError: any) {
+        console.error('Image pipeline failed:', imagePipelineError.message)
       }
     } catch (error: any) {
       console.error('Image processing failed:', error.message)
       console.error('Error stack:', error.stack)
+      console.error('Error details:', error)
+      // Don't silently fail - log the error but continue
       imageResult = null
     }
   } else {
     console.log('No images found on the page')
   }
   
-  return {
+  // Ensure we have valid strings (not undefined or empty)
+  const finalPageAltText = (pageAltText && typeof pageAltText === 'string' && pageAltText.trim()) 
+    ? pageAltText.trim() 
+    : 'Unable to generate alt-text'
+  const finalPageTopic = (pageTopic && typeof pageTopic === 'string' && pageTopic.trim())
+    ? pageTopic.trim()
+    : 'Unable to determine topic'
+  
+  // Build result object - ensure all fields are explicitly set (not undefined)
+  const finalResult: {
+    url: string
+    pageAltText: string
+    pageTopic: string
+    fuelUsed?: number
+    imageUrl?: string
+    imageAltText?: string
+    imageDescription?: string
+    imageWidth?: number
+    imageHeight?: number
+    imageSize?: number
+  } = {
     url,
-    pageAltText: pageAltText || 'Unable to generate alt-text',
-    pageTopic: pageTopic || 'Unable to determine topic',
-    fuelUsed: pageResult.fuelUsed,
-    imageUrl: imageResult?.imageUrl,
-    imageAltText: imageResult?.altText,
-    imageDescription: imageResult?.description,
-    imageWidth: imageResult?.imageWidth,
-    imageHeight: imageResult?.imageHeight,
-    imageSize: imageResult?.imageSize,
+    pageAltText: finalPageAltText,
+    pageTopic: finalPageTopic,
   }
+  
+  // Only add optional fields if they have values (to avoid undefined in JSON)
+  if (fuelUsed !== undefined) {
+    finalResult.fuelUsed = fuelUsed
+  }
+  if (imageResult?.imageUrl) {
+    finalResult.imageUrl = imageResult.imageUrl
+    if (imageResult.altText) finalResult.imageAltText = imageResult.altText
+    if (imageResult.description) finalResult.imageDescription = imageResult.description
+    if (imageResult.imageWidth !== undefined) finalResult.imageWidth = imageResult.imageWidth
+    if (imageResult.imageHeight !== undefined) finalResult.imageHeight = imageResult.imageHeight
+    if (imageResult.imageSize !== undefined) finalResult.imageSize = imageResult.imageSize
+  }
+  
+  console.log('Final result:', {
+    url: finalResult.url,
+    pageAltText: finalResult.pageAltText,
+    pageTopic: finalResult.pageTopic,
+    hasPageAltText: !!finalResult.pageAltText && finalResult.pageAltText !== 'Unable to generate alt-text',
+    hasImageUrl: !!finalResult.imageUrl,
+    hasImageAltText: !!finalResult.imageAltText,
+    fullResultKeys: Object.keys(finalResult),
+  })
+  
+  // Validate that we're returning the expected structure
+  if (!finalResult.pageAltText || !finalResult.pageTopic) {
+    console.error('ERROR: Final result missing required fields!', finalResult)
+  }
+  
+  return finalResult
 }
 
 /**
@@ -856,6 +1162,99 @@ function createCustomCapabilities(llmBaseUrl: string) {
 }
 
 /**
+ * Custom atom for extracting text from HTML
+ * This keeps HTML processing within the VM execution model
+ */
+const htmlExtractText = defineAtom(
+  'htmlExtractText',
+  s.object({ html: s.string }),
+  s.string,
+  async ({ html }: { html: string }, ctx: any) => {
+    return extractTextFromHTML(html)
+  },
+  { docs: 'Extract text content from HTML string', cost: 1 }
+)
+
+/**
+ * Custom atom for extracting images from HTML
+ * Returns array of image information with URLs, dimensions, and metadata
+ */
+const extractImagesFromHTMLAtom = defineAtom(
+  'extractImagesFromHTML',
+  s.object({ html: s.string, baseUrl: s.string }),
+  s.array(s.object({
+    url: s.string,
+    width: s.any,
+    height: s.any,
+    alt: s.any,
+    area: s.any,
+    size: s.any,
+  })),
+  async ({ html, baseUrl }: { html: string; baseUrl: string }, ctx: any) => {
+    return extractImagesFromHTML(html, baseUrl)
+  },
+  { docs: 'Extract image information from HTML string', cost: 5 }
+)
+
+/**
+ * Custom atom for filtering candidate images
+ * Filters to images larger than icon size and limits to top candidates
+ */
+const filterCandidateImagesAtom = defineAtom(
+  'filterCandidateImages',
+  s.object({ 
+    images: s.array(s.object({
+      url: s.string,
+      width: s.any,
+      height: s.any,
+      alt: s.any,
+      area: s.any,
+      size: s.any,
+    })),
+    maxCandidates: s.any
+  }),
+  s.array(s.object({
+    url: s.string,
+    width: s.any,
+    height: s.any,
+    alt: s.any,
+    area: s.any,
+    size: s.any,
+  })),
+  async ({ images, maxCandidates = 3 }: { images: ImageInfo[]; maxCandidates?: number }, ctx: any) => {
+    return filterCandidateImages(images, maxCandidates)
+  },
+  { docs: 'Filter images to candidates larger than icon size', cost: 1 }
+)
+
+/**
+ * Custom atom for constructing LLM user prompt from URL and page text
+ * This keeps prompt construction within the VM execution model
+ * Takes URL as parameter, uses current result (pageText) from pipeline
+ */
+const buildUserPrompt = defineAtom(
+  'buildUserPrompt',
+  s.object({ url: s.string }),
+  s.string,
+  async ({ url }: { url: string }, ctx: any) => {
+    // Get pageText from the current result (previous pipeline step)
+    // In agent-99, the current result is available via the context
+    // For now, we'll get it from the variable store where we stored it
+    const pageText = ctx.vars?.pageText || ''
+    // Limit pageText to 3000 chars for token efficiency
+    const limitedText = typeof pageText === 'string' ? pageText.substring(0, 3000) : String(pageText || '')
+    return `Generate alt-text for a link to this webpage: ${url}
+
+Here is the extracted text content from the webpage (first 3000 characters):
+
+${limitedText}
+
+Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`
+  },
+  { docs: 'Build user prompt for LLM from URL (param) and pageText (from variable store)', cost: 1 }
+)
+
+/**
  * Creates a custom LLM atom with longer timeout for reasoning models
  */
 const llmPredictBatteryLongTimeout = defineAtom(
@@ -911,6 +1310,272 @@ const llmVisionBattery = defineAtom(
 )
 
 /**
+ * Custom atom for fetching image data and converting to base64
+ * Uses httpFetch atom internally for capability-based security
+ */
+const fetchImageDataAtom = defineAtom(
+  'fetchImageData',
+  s.object({ imageUrl: s.string }),
+  s.object({
+    size: s.number,
+    base64: s.string,
+    width: s.any,
+    height: s.any,
+  }),
+  async ({ imageUrl }: { imageUrl: string }, ctx: any) => {
+    // Use fetch capability (which should be provided via httpFetch atom in pipeline)
+    // For now, we'll use the fetch capability directly
+    const fetchCap = ctx.capabilities.fetch || fetch
+    const response = await fetchCap(imageUrl)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status}`)
+    }
+    
+    const arrayBuffer = await response.arrayBuffer()
+    const size = arrayBuffer.byteLength
+    
+    // Convert to base64
+    const buffer = Buffer.from(arrayBuffer)
+    const base64 = buffer.toString('base64')
+    
+    // Try to get content type
+    const contentType = response.headers.get('content-type') || 'image/jpeg'
+    const dataUri = `data:${contentType};base64,${base64}`
+    
+    return {
+      size,
+      base64: dataUri,
+    }
+  },
+  { docs: 'Fetch image data and convert to base64 data URI', cost: 10 }
+)
+
+/**
+ * Custom atom for processing candidate images in parallel
+ * Fetches image data and scores them for interestingness
+ */
+const processCandidateImagesAtom = defineAtom(
+  'processCandidateImages',
+  s.object({
+    candidates: s.array(s.object({
+      url: s.string,
+      width: s.any,
+      height: s.any,
+      alt: s.any,
+      area: s.any,
+      size: s.any,
+    })),
+    pageContext: s.any,
+  }),
+  s.array(s.object({
+    img: s.object({
+      url: s.string,
+      width: s.any,
+      height: s.any,
+      alt: s.any,
+      area: s.any,
+      size: s.any,
+    }),
+    imageData: s.object({
+      size: s.number,
+      base64: s.string,
+    }),
+    score: s.number,
+  })),
+  async ({ candidates, pageContext }: any, ctx: any) => {
+    const fetchCap = ctx.capabilities.fetch || fetch
+    const llmCap = ctx.capabilities.llm
+    
+    // Fetch image data for all candidates in parallel
+    const candidateData = await Promise.all(
+      candidates.map(async (img: ImageInfo) => {
+        try {
+          const response = await fetchCap(img.url)
+          if (!response.ok) {
+            throw new Error(`Failed to fetch image: ${response.status}`)
+          }
+          
+          const arrayBuffer = await response.arrayBuffer()
+          const size = arrayBuffer.byteLength
+          const buffer = Buffer.from(arrayBuffer)
+          const base64 = buffer.toString('base64')
+          const contentType = response.headers.get('content-type') || 'image/jpeg'
+          const dataUri = `data:${contentType};base64,${base64}`
+          
+          img.size = size
+          return { img, imageData: { size, base64: dataUri }, error: null }
+        } catch (error) {
+          console.warn(`Failed to fetch image ${img.url}:`, error)
+          return { img, imageData: null, error }
+        }
+      })
+    )
+    
+    // Filter out failed fetches
+    const validCandidates = candidateData.filter(c => c.imageData !== null && c.error === null)
+    
+    if (validCandidates.length === 0) {
+      return []
+    }
+    
+    // Score all candidates in parallel
+    const scoredCandidates = await Promise.all(
+      validCandidates.map(async ({ img, imageData }: any) => {
+        try {
+          if (!llmCap?.predictWithVision) {
+            // Fallback score if vision not available
+            const fallbackScore = img.area ? Math.min(50, img.area / 10000) : 
+                                img.size ? Math.min(50, img.size / 100000) : 0
+            return { img, imageData, score: fallbackScore }
+          }
+          
+          const systemPrompt = `You are an image analysis expert. Score images 0-100 for interestingness. Return JSON with "score" field.`
+          let userPrompt = `Score this image: ${img.url}`
+          if (pageContext) {
+            userPrompt += `\nPage: ${pageContext.topic}`
+          }
+          
+          const responseFormat = {
+            type: 'json_schema',
+            json_schema: {
+              name: 'interestingness_score',
+              schema: {
+                type: 'object',
+                properties: {
+                  score: { type: 'number', minimum: 0, maximum: 100 },
+                },
+                required: ['score'],
+              },
+            },
+          }
+          
+          const llmResponse = await llmCap.predictWithVision(
+            systemPrompt,
+            userPrompt,
+            imageData.base64,
+            responseFormat
+          )
+          
+          const parsed = JSON.parse(llmResponse.content)
+          const score = parsed.score || 0
+          return { img, imageData, score }
+        } catch (error) {
+          // Fallback score
+          const fallbackScore = img.area ? Math.min(50, img.area / 10000) : 
+                              img.size ? Math.min(50, img.size / 100000) : 0
+          return { img, imageData, score: fallbackScore }
+        }
+      })
+    )
+    
+    return scoredCandidates
+  },
+  { docs: 'Process candidate images in parallel: fetch and score', cost: 250, timeoutMs: 120000 }
+)
+
+/**
+ * Custom atom for scoring image interestingness
+ * Uses llmVisionBattery internally for vision analysis
+ */
+const scoreImageInterestingnessAtom = defineAtom(
+  'scoreImageInterestingness',
+  s.object({
+    imageDataUri: s.string,
+    imageInfo: s.object({
+      url: s.string,
+      width: s.any,
+      height: s.any,
+      alt: s.any,
+      area: s.any,
+      size: s.any,
+    }),
+    pageContext: s.any,
+  }),
+  s.number,
+  async ({ imageDataUri, imageInfo, pageContext }: any, ctx: any) => {
+    const systemPrompt = `You are an image analysis expert. Your task is to score images on a scale of 0-100 for how "interesting" or informative they are.
+
+Consider these factors:
+- Visual complexity and content richness (charts, diagrams, photos with detail > simple icons)
+- Informative value (does it convey meaningful information vs being purely decorative?)
+- Relevance to typical webpage content (main content images > decorative elements)
+- Presence of text, data visualizations, or complex scenes
+- Overall visual appeal and engagement
+
+Score guidelines:
+- 0-20: Simple icons, logos, decorative elements, tracking pixels
+- 21-40: Simple graphics, basic illustrations
+- 41-60: Standard photos, moderate complexity
+- 61-80: Rich content images, charts, diagrams, detailed photos
+- 81-100: Highly informative images, complex data visualizations, key content images
+
+Return your response as JSON with a single "score" field (0-100).`
+
+    let userPrompt = `Score this image for interestingness:
+
+Image URL: ${imageInfo.url}
+${imageInfo.alt ? `Alt text: ${imageInfo.alt}` : 'No alt text available'}
+${imageInfo.width && imageInfo.height ? `Dimensions: ${imageInfo.width}x${imageInfo.height}` : ''}`
+
+    if (pageContext) {
+      userPrompt += `
+
+Page Context:
+- Page Topic: ${pageContext.topic}
+- Page Description: ${pageContext.altText}
+
+Consider how relevant and informative this image is in the context of this page.`
+    }
+
+    userPrompt += `
+
+Return JSON with "score" field (0-100).`
+
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'interestingness_score',
+        schema: {
+          type: 'object',
+          properties: {
+            score: {
+              type: 'number',
+              description: 'Interestingness score from 0-100',
+              minimum: 0,
+              maximum: 100,
+            },
+          },
+          required: ['score'],
+        },
+      },
+    }
+
+    const llmCap = ctx.capabilities.llm
+    if (!llmCap?.predictWithVision) {
+      throw new Error("Capability 'llm.predictWithVision' missing or invalid.")
+    }
+
+    try {
+      const llmResponse = await llmCap.predictWithVision(
+        systemPrompt,
+        userPrompt,
+        imageDataUri,
+        responseFormat
+      )
+
+      const parsed = JSON.parse(llmResponse.content)
+      return parsed.score || 0
+    } catch (error) {
+      // Fallback: use size/area as a proxy for interestingness
+      if (imageInfo.area) return Math.min(50, imageInfo.area / 10000)
+      if (imageInfo.size) return Math.min(50, imageInfo.size / 100000)
+      return 0
+    }
+  },
+  { docs: 'Score image for interestingness using LLM vision', cost: 200, timeoutMs: 60000 }
+)
+
+/**
  * Creates a VM instance configured with battery capabilities for local development
  */
 function createVM() {
@@ -919,6 +1584,13 @@ function createVM() {
     storeSearch,
     llmPredictBattery: llmPredictBatteryLongTimeout, // Use custom atom with longer timeout
     llmVisionBattery, // Register vision atom for image processing
+    htmlExtractText, // Register HTML text extraction atom
+    buildUserPrompt, // Register user prompt builder atom
+    extractImagesFromHTML: extractImagesFromHTMLAtom, // Register image extraction atom
+    filterCandidateImages: filterCandidateImagesAtom, // Register image filtering atom
+    fetchImageData: fetchImageDataAtom, // Register image fetching atom
+    scoreImageInterestingness: scoreImageInterestingnessAtom, // Register image scoring atom
+    processCandidateImages: processCandidateImagesAtom, // Register parallel image processing atom
   })
 }
 
@@ -1026,20 +1698,28 @@ export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) 
  * @returns Object containing the alt-text and metadata
  */
 export async function generateAltText(url: string, llmBaseUrl?: string) {
-  // First, fetch the webpage content
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`)
-  }
-  const html = await response.text()
-  const pageText = extractTextFromHTML(html)
-  
   const vm = createVM()
   const b = vm.A99
 
-  // Build the agent logic chain
-  // Use LLM to generate alt-text from the extracted page content
+  // Build the agent logic chain using httpFetch inside the VM
+  // This follows agent-99's "agents-as-data" principle - all logic is in the VM
   const logic = b
+    // Fetch the webpage using httpFetch atom (capability-based security)
+    .httpFetch({ url: A99.args('url') })
+    .as('response')
+    .varGet({ key: 'response.text' })
+    .as('html')
+    // Extract text from HTML using custom atom
+    .htmlExtractText({ html: A99.args('html') })
+    .as('pageText')
+    // Store pageText in variable for prompt construction
+    .varSet({ key: 'pageText', value: 'pageText' })
+    // Construct user prompt - URL comes from input args, pageText from variable store
+    .buildUserPrompt({
+      url: A99.args('url'),
+    })
+    .as('userPrompt')
+    // Use LLM to generate alt-text from the extracted page content
     .llmPredictBattery({
       system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
 The alt-text should:
@@ -1050,13 +1730,7 @@ The alt-text should:
 - Focus on what the user would find on the page
 
 You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
-      user: `Generate alt-text for a link to this webpage: ${url}
-
-Here is the extracted text content from the webpage:
-
-${pageText.substring(0, 3000)}
-
-Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`,
+      user: A99.args('userPrompt'),
       responseFormat: {
         type: 'json_schema',
         json_schema: {
@@ -1096,17 +1770,22 @@ Analyze this content and generate a concise alt-text summary suitable for access
   const ast = logic.toJSON()
 
   // Execute in VM with capabilities
-  // Note: The httpFetch response will be automatically passed to the LLM
   const customCapabilities = llmBaseUrl 
     ? createCustomCapabilities(llmBaseUrl)
     : batteries
 
+  // Provide fetch capability for httpFetch atom
+  const capabilitiesWithFetch = {
+    ...customCapabilities,
+    fetch: customCapabilities.fetch || batteries.fetch || fetch,
+  }
+
   const result = await vm.run(
     ast,
-    {}, // No input args needed since we're passing content directly
+    { url },
     {
       fuel: 10000, // Execution budget
-      capabilities: customCapabilities, // Enable battery capabilities (LLM, etc.)
+      capabilities: capabilitiesWithFetch, // Enable battery capabilities (LLM, HTTP fetch, etc.)
     }
   )
 

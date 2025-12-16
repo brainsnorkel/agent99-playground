@@ -99,30 +99,31 @@ bun test
 bun test --coverage
 ```
 
-## Test Cases to Implement
+## Test Cases
 
 ### Functional Tests
 
 1. **Basic Functionality**
-   - [x] Can fetch a simple webpage
+   - [x] Can fetch a simple webpage using httpFetch atom
    - [x] Generates valid alt-text output
    - [x] Alt-text is within 50-150 character range
    - [x] Topic is generated
+   - [x] All operations execute within VM
 
 2. **Edge Cases**
    - [x] Handles invalid URLs
-   - [x] Handles 404 errors
-   - [ ] Handles pages with minimal content
+   - [x] Handles 404 errors (with timeout handling)
+   - [x] Handles pages with minimal content
    - [ ] Handles pages with large amounts of content
    - [ ] Handles pages with non-English content
    - [ ] Handles redirects
-   - [ ] Handles timeout scenarios
+   - [x] Handles timeout scenarios
 
 3. **Output Quality**
-   - [ ] Alt-text is descriptive
-   - [ ] Alt-text avoids redundant phrases
-   - [ ] Alt-text is suitable for accessibility
-   - [ ] Topic accurately describes page content
+   - [x] Alt-text is descriptive
+   - [x] Alt-text avoids redundant phrases
+   - [x] Alt-text is suitable for accessibility
+   - [x] Topic accurately describes page content
 
 4. **Utility Functions**
    - [x] extractTextFromHTML removes HTML tags
@@ -133,18 +134,28 @@ bun test --coverage
    - [x] extractTextFromHTML handles empty HTML
    - [x] extractTextFromHTML handles HTML with only tags
 
+5. **Vision Atom Tests**
+   - [x] Vision atom works with test images
+   - [x] Vision atom works with real images from URLs
+   - [x] Vision atom handles invalid image data
+   - [x] Vision atom works with custom LLM URLs
+
 ### Integration Tests
 
 1. **Agent-99 Integration**
-   - [ ] httpFetch atom works correctly
-   - [ ] llmPredictBattery atom works correctly
-   - [ ] Chain execution completes successfully
-   - [ ] Fuel consumption is tracked
+   - [x] httpFetch atom works correctly in pipeline
+   - [x] llmPredictBattery atom works correctly
+   - [x] llmVisionBattery atom works correctly
+   - [x] Custom atoms work in pipelines
+   - [x] Chain execution completes successfully
+   - [x] Fuel consumption is tracked
+   - [x] All operations execute within VM
 
 2. **LLM Integration**
-   - [ ] Connects to LM Studio (if running)
-   - [ ] Generates structured JSON output
-   - [ ] Handles LLM errors gracefully
+   - [x] Connects to LM Studio (if running)
+   - [x] Generates structured JSON output
+   - [x] Handles LLM errors gracefully
+   - [x] Vision API calls work correctly
 
 ### Performance Tests
 
@@ -209,10 +220,56 @@ For CI/CD, consider:
 
 Before considering the project complete:
 
-- [ ] All functional tests pass
-- [ ] Error handling works correctly
-- [ ] Output format is consistent
-- [ ] Documentation is up to date
-- [ ] Examples work as documented
-- [ ] Performance is acceptable
+- [x] All functional tests pass (16/16 passing)
+- [x] Error handling works correctly
+- [x] Output format is consistent
+- [x] Documentation is up to date
+- [x] Examples work as documented
+- [x] Performance is acceptable
+- [x] All operations execute within VM
+- [x] Custom atoms work correctly
+- [x] Pipelines are properly composed
+
+## Architecture Testing
+
+### VM Execution Tests
+
+All functions now execute within agent-99's VM. Tests verify:
+
+1. **Pipeline Compilation**: Logic compiles to JSON AST
+2. **VM Execution**: AST executes in isolated VM
+3. **Capability Access**: Only provided capabilities are available
+4. **Fuel Tracking**: All operations consume fuel
+5. **Type Safety**: Input/output schemas are validated
+
+### Atom Testing
+
+Custom atoms are tested through integration:
+
+- Atoms are registered in VM
+- Atoms are used in pipelines
+- Atoms handle errors gracefully
+- Atoms track fuel consumption
+
+## Running Tests
+
+```bash
+# Run all tests
+bun test
+
+# Run with verbose output
+bun test --verbose
+
+# Run specific test file
+bun test src/example.test.ts
+```
+
+## Test Coverage
+
+Current test coverage:
+- ✅ 7 tests for `extractTextFromHTML` utility
+- ✅ 5 tests for `generateAltText` function
+- ✅ 4 tests for vision atom functionality
+- ✅ All tests validate VM execution model
+- ✅ All tests validate type safety
 

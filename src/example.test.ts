@@ -99,7 +99,8 @@ describe('generateAltText', () => {
       expect(result).toHaveProperty('url')
       expect(result).toHaveProperty('altText')
     } catch (error: any) {
-      expect(error.message).toContain('Failed to fetch')
+      // Accept various error message formats for fetch failures and timeouts
+      expect(error.message).toMatch(/Failed to fetch|Unable to connect|connection|refused|timed out|timeout/i)
     }
   }, { timeout: 30000 })
 

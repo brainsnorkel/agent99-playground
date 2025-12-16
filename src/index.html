@@ -387,6 +387,19 @@
           throw new Error(data.error || 'Failed to process URL')
         }
 
+        // Log the response for debugging
+        console.log('Processing response:', {
+          url: data.url,
+          pageAltText: data.pageAltText,
+          pageTopic: data.pageTopic,
+          hasPageAltText: !!data.pageAltText,
+          hasImageUrl: !!data.imageUrl,
+          hasImageAltText: !!data.imageAltText,
+          imageUrl: data.imageUrl,
+          imageAltText: data.imageAltText,
+          fullData: data, // Log full response to see structure
+        })
+
         // Clear input
         urlInput.value = ''
         urlInput.disabled = false
@@ -420,11 +433,29 @@
         }
 
         container.innerHTML = history.map(item => {
+          // Debug logging
+          console.log('Rendering history item:', {
+            url: item.url,
+            hasImageUrl: !!item.imageUrl,
+            imageUrl: item.imageUrl,
+            hasImageAltText: !!item.imageAltText,
+            imageAltText: item.imageAltText,
+          })
+          
+          // Handle backward compatibility with old format
+          const pageAltText = item.pageAltText || item.altText || 'No alt-text generated'
+          const pageTopic = item.pageTopic || item.topic || ''
+          
+          // For old entries that only have image data (mode: 'image'), show image alt-text as main
+          const isOldImageOnly = item.mode === 'image' && !item.pageAltText && !item.altText && item.imageAltText
+          const mainAltText = isOldImageOnly ? item.imageAltText : pageAltText
+          const mainLabel = isOldImageOnly ? 'Image Alt-Text' : 'Page Alt-Text'
+          
           const imageSection = item.imageUrl ? `
             <div class="result-image-container">
               <img 
                 src="${escapeHtml(item.imageUrl)}" 
-                alt="${escapeHtml(item.imageAltText || item.pageAltText)}"
+                alt="${escapeHtml(item.imageAltText || pageAltText)}"
                 class="result-image-thumbnail"
                 onclick="window.open('${escapeHtml(item.imageUrl)}', '_blank')"
                 onerror="this.style.display='none'"
@@ -456,13 +487,13 @@
           return `
             <div class="result-item">
               <div class="result-url">${escapeHtml(item.url)}</div>
-              <div class="result-topic">Topic: ${escapeHtml(item.pageTopic)}</div>
+              ${pageTopic ? `<div class="result-topic">Topic: ${escapeHtml(pageTopic)}</div>` : ''}
               <div class="result-alt-text">
-                <strong>Page Alt-Text:</strong><br>
-                ${escapeHtml(item.pageAltText)}
+                <strong>${mainLabel}:</strong><br>
+                ${escapeHtml(mainAltText)}
               </div>
               ${imageSection}
-              ${imageAltTextSection}
+              ${!isOldImageOnly && imageAltTextSection}
               ${imageDescriptionSection}
               <div class="result-meta">
                 ${item.fuelUsed !== undefined ? `<span>Fuel used: ${item.fuelUsed}</span>` : ''}
