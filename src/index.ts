@@ -8,7 +8,6 @@ import {
   defineAtom,
 } from 'agent-99'
 import { s } from 'tosijs-schema'
-import { DEFAULT_LLM_URL } from './config'
 
 /**
  * Represents an image found on a webpage
@@ -289,19 +288,19 @@ export async function fetchImageData(imageUrl: string): Promise<{ size: number; 
 }
 
 /**
- * Filters images to those larger than icon size and limits to top candidates
- * Icon size threshold: area > 10000 (roughly 100x100) or width > 100 and height > 100
+ * Filters images to those larger than 10x10 and limits to top candidates
+ * Minimum size threshold: area > 100 or width > 10 and height > 10
  */
 function filterCandidateImages(images: ImageInfo[], maxCandidates: number = 3): ImageInfo[] {
-  // Filter to images larger than icon size
+  // Filter to images larger than 10x10
   const candidates = images.filter(img => {
-    // If we have area, use that (area > 10000 = roughly 100x100)
-    if (img.area && img.area > 10000) return true
-    // If we have both width and height, check both
-    if (img.width && img.height && img.width > 100 && img.height > 100) return true
-    // If we only have width or height, check if it's substantial
-    if (img.width && img.width > 200) return true
-    if (img.height && img.height > 200) return true
+    // If we have area, use that (area > 100 = 10x10)
+    if (img.area && img.area > 100) return true
+    // If we have both width and height, check both are > 10
+    if (img.width && img.height && img.width > 10 && img.height > 10) return true
+    // If we only have width or height, check if it's > 10
+    if (img.width && img.width > 10) return true
+    if (img.height && img.height > 10) return true
     // If no dimensions, include it (we'll check file size later)
     if (!img.width && !img.height) return true
     return false
@@ -382,7 +381,7 @@ export async function generateImageAltText(url: string, llmBaseUrl?: string, pag
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
@@ -669,7 +668,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   const customCapabilities = finalLlmUrl 
     ? createCustomCapabilities(finalLlmUrl)
@@ -1600,7 +1599,7 @@ const extractImagesFromHTMLAtom = defineAtom(
 
 /**
  * Custom atom for filtering candidate images
- * Filters to images larger than icon size and limits to top candidates
+ * Filters to images larger than 10x10 and limits to top candidates
  */
 const filterCandidateImagesAtom = defineAtom(
   'filterCandidateImages',
@@ -1639,7 +1638,7 @@ const filterCandidateImagesAtom = defineAtom(
     
     return filterCandidateImages(actualImages, maxCandidates)
   },
-  { docs: 'Filter images to candidates larger than icon size', cost: 1 }
+  { docs: 'Filter images to candidates larger than 10x10', cost: 1 }
 )
 
 /**
@@ -2136,7 +2135,7 @@ export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) 
   const ast = logic.toJSON()
   
   // Execute in VM with capabilities
-  const llmUrl = llmBaseUrl || DEFAULT_LLM_URL
+  const llmUrl = llmBaseUrl || 'http://192.168.1.61:1234/v1'
   const finalLlmUrl = llmUrl.endsWith('/v1') ? llmUrl : `${llmUrl}/v1`
   
   // Create capabilities with vision support - always use createCustomCapabilities
@@ -2322,7 +2321,7 @@ async function main() {
   const mode = process.argv[2]
   const url = process.argv[3]
   // Default to custom LLM URL, ensure it has /v1 suffix for LM Studio compatibility
-  const llmBaseUrl = process.env.LLM_URL || DEFAULT_LLM_URL
+  const llmBaseUrl = process.env.LLM_URL || 'http://192.168.1.61:1234'
   const llmUrl = llmBaseUrl.endsWith('/v1') ? llmBaseUrl : `${llmBaseUrl}/v1`
 
   // Support both: "bun run src/index.ts <url>" and "bun run src/index.ts --image <url>"

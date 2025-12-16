@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Changed (2025-12-17) - Relax Image Size Requirements
+- **`filterCandidateImages()`**: Relaxed minimum image size from 100x100 to 10x10
+  - Images must now be larger than 10x10 pixels (area > 100) to be considered
+  - This allows smaller but potentially interesting images to be processed
+
 ### Fixed (2025-12-16) - Code Review Session
 - **CRITICAL: `generateAltText()` was broken**: The function was using `.varGet({ key: 'response.text' })` which gets the method reference (`function text() { [native code] }`) instead of calling it. Now uses `extractResponseText` atom like `generateCombinedAltText()` to properly extract HTML content.
 - **Removed dead code**: Removed unused standalone `scoreImageInterestingness()` function (lines 294-375) - the atom version is used instead
