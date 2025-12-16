@@ -68,13 +68,119 @@ console.log(result.altText) // "Example domain for documentation and testing"
 
 ## How It Works
 
-1. **Fetch**: The agent uses `httpFetch` atom to retrieve the webpage content
-2. **Process**: The response is passed to the LLM for analysis
-3. **Generate**: The LLM generates structured output with:
-   - `altText`: Concise description (50-150 characters) suitable for link alt-text
-   - `topic`: Brief description of the page topic
+This project demonstrates key agent-99 pipelines for building type-safe, secure agent workflows. The entire process follows agent-99's execution model:
 
-The entire workflow is defined as a type-safe chain using agent-99's builder API, compiled to an AST, and executed in the isolated VM.
+### Execution Flow
+
+1. **Content Extraction**: The webpage HTML is fetched and text content is extracted (outside the VM for simplicity)
+2. **Pipeline Construction**: A type-safe pipeline is built using agent-99's builder API
+3. **AST Compilation**: The pipeline is compiled to a JSON AST representation
+4. **VM Execution**: The AST is executed in an isolated VM with explicit capabilities
+5. **Result Extraction**: Structured output is returned with type validation
+
+### Key Agent-99 Pipelines
+
+The project uses several core agent-99 pipelines to build the workflow:
+
+#### 1. **llmPredictBattery Pipeline**
+The primary pipeline for LLM interactions. This atom:
+- Makes type-safe LLM calls with structured input/output schemas
+- Supports system prompts, user messages, and tool definitions
+- Enforces JSON schema response formats for structured outputs
+- Uses battery capabilities (local or remote LLM providers)
+
+```167:205:src/index.ts
+  const logic = b
+    .llmPredictBattery({
+      system: `You are an accessibility expert. Your task is to generate concise, descriptive alt-text that would be suitable for a link to a webpage. 
+The alt-text should:
+- Be 50-150 characters long
+- Describe the main topic or purpose of the page
+- Be clear and informative
+- Avoid redundant phrases like "link to" or "page about"
+- Focus on what the user would find on the page
+
+You will receive webpage content (which may include HTML). Extract the meaningful text content and generate appropriate alt-text based on the page's main topic and purpose.`,
+      user: `Generate alt-text for a link to this webpage: ${url}
+
+Here is the extracted text content from the webpage:
+
+${pageText.substring(0, 3000)}
+
+Analyze this content and generate a concise alt-text summary suitable for accessibility purposes. Return your response as JSON with "altText" and "topic" fields.`,
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'alt_text_result',
+          schema: {
+            type: 'object',
+            properties: {
+              altText: {
+                type: 'string',
+                description: 'The alt-text suitable for a link to this page (50-150 characters)',
+              },
+              topic: {
+                type: 'string',
+                description: 'Brief description of the page topic',
+              },
+            },
+            required: ['altText', 'topic'],
+          },
+        },
+      },
+    })
+```
+
+#### 2. **Variable Management Pipelines**
+Agent-99 provides type-safe variable operations:
+
+- **`.as(alias)`**: Creates an alias for the current pipeline result, allowing reference in subsequent steps
+- **`.varGet({ key })`**: Retrieves values from the variable store using dot-notation paths
+- **`.varSet({ key, value })`**: Stores values in the variable store for later use
+
+```206:212:src/index.ts
+    .as('summary')
+    .varGet({ key: 'summary.content' })
+    .as('jsonContent')
+    .jsonParse({ str: 'jsonContent' })
+    .as('parsed')
+    .varSet({ key: 'altText', value: 'parsed.altText' })
+    .varSet({ key: 'topic', value: 'parsed.topic' })
+```
+
+#### 3. **Data Transformation Pipelines**
+- **`.jsonParse({ str })`**: Parses JSON strings into structured objects with type validation
+- Ensures data integrity throughout the pipeline
+
+#### 4. **Output Schema Pipeline**
+- **`.return(schema)`**: Defines the final output schema using `tosijs-schema`
+- Provides runtime type validation and ensures the VM returns only the specified structure
+
+```213:218:src/index.ts
+    .return(
+      s.object({
+        altText: s.string,
+        topic: s.string,
+      })
+    )
+```
+
+#### 5. **Additional Available Pipelines**
+While not used in this example, agent-99 provides other powerful pipelines:
+
+- **`httpFetch`**: Safe HTTP requests with capability-based security (can be used inside the VM)
+- **`storeVectorize`**: Convert text to embeddings for semantic search
+- **`storeSearch`**: Vector similarity search across stored embeddings
+- **`defineAtom`**: Create custom atoms with custom schemas and capabilities
+
+### Pipeline Execution Model
+
+1. **Builder Pattern**: Pipelines are constructed using fluent builder API (`vm.A99`)
+2. **AST Compilation**: `.toJSON()` compiles the pipeline to a JSON AST
+3. **Isolated Execution**: `vm.run()` executes the AST in a stateless, isolated environment
+4. **Capability-Based Security**: Only explicitly provided capabilities are available (LLM, HTTP, storage, etc.)
+5. **Fuel Budget**: Execution is limited by fuel to prevent runaway processes
+6. **Type Safety**: Input/output schemas are validated at runtime using `tosijs-schema`
 
 ## Configuration
 

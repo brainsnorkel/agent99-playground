@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Server verification steps
   - Troubleshooting section
   - Connection testing commands
+- Expanded "How It Works" section in README.md documenting key agent-99 pipelines:
+  - llmPredictBattery pipeline for LLM interactions
+  - Variable management pipelines (as, varGet, varSet)
+  - Data transformation pipelines (jsonParse)
+  - Output schema pipeline (return)
+  - Additional available pipelines (httpFetch, storeVectorize, storeSearch)
+  - Pipeline execution model explanation
 
 ### Changed
 - Fixed test length validation to match requirements (50-150 characters instead of 20-200)
