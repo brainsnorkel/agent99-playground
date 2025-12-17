@@ -504,6 +504,7 @@
           
           // Check if there's an error to display
           const hasError = item.error && item.error.errorType
+          const hasLLMError = item.llmError && item.llmError.errorType
           const errorSection = hasError ? `
             <div class="result-error">
               <div class="result-error-header">
@@ -512,6 +513,17 @@
               </div>
               <div class="result-error-message">${escapeHtml(item.error.errorMessage)}</div>
               <div class="result-error-suggestion">${escapeHtml(item.error.suggestion)}</div>
+            </div>
+          ` : ''
+          const llmErrorSection = hasLLMError ? `
+            <div class="result-error">
+              <div class="result-error-header">
+                <span class="result-error-type">LLM: ${escapeHtml(item.llmError.errorType.replace('_', ' '))}</span>
+                ${item.llmError.errorCode ? `<span>HTTP ${item.llmError.errorCode}</span>` : ''}
+              </div>
+              <div class="result-error-message">${escapeHtml(item.llmError.errorMessage)}</div>
+              <div class="result-error-suggestion">${escapeHtml(item.llmError.suggestion)}</div>
+              ${item.llmError.llmUrl ? `<div style="font-size: 0.85rem; color: #666; margin-top: 4px;">Server: ${escapeHtml(item.llmError.llmUrl)}</div>` : ''}
             </div>
           ` : ''
           
@@ -549,17 +561,18 @@
             : ''
           
           return `
-            <div class="result-item${hasError ? ' has-error' : ''}">
+            <div class="result-item${hasError || hasLLMError ? ' has-error' : ''}">
               <div class="result-url">${escapeHtml(item.url)}</div>
               ${errorSection}
-              ${!hasError && pageTopic ? `<div class="result-topic">Topic: ${escapeHtml(pageTopic)}</div>` : ''}
-              ${!hasError ? `<div class="result-alt-text">
+              ${llmErrorSection}
+              ${!hasError && !hasLLMError && pageTopic ? `<div class="result-topic">Topic: ${escapeHtml(pageTopic)}</div>` : ''}
+              ${!hasError && !hasLLMError ? `<div class="result-alt-text">
                 <strong>${mainLabel}:</strong><br>
                 ${escapeHtml(mainAltText)}
               </div>` : ''}
-              ${!hasError ? imageSection : ''}
-              ${!hasError && !isOldImageOnly && imageAltTextSection}
-              ${!hasError ? imageDescriptionSection : ''}
+              ${!hasError && !hasLLMError ? imageSection : ''}
+              ${!hasError && !hasLLMError && !isOldImageOnly && imageAltTextSection}
+              ${!hasError && !hasLLMError ? imageDescriptionSection : ''}
               <div class="result-meta">
                 ${item.fuelUsed !== undefined ? `<span>Fuel used: ${item.fuelUsed}</span>` : ''}
                 <span>${new Date(item.timestamp).toLocaleString()}</span>

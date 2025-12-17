@@ -830,6 +830,7 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
   let pageTopic: string | undefined
   let fuelUsed = 0 // Accumulate fuel from all VM runs
   let fetchError: FetchErrorInfo | undefined
+  let llmError: LLMErrorInfo | undefined
   
   try {
     pipelineResult = await vm.run(
@@ -885,6 +886,11 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
       fetchError = vmError.fetchErrorInfo
       pageAltText = `Site could not be analyzed: ${fetchError!.errorMessage}`
       pageTopic = `Error: ${fetchError!.errorType}`
+    } else if (vmError.llmErrorInfo) {
+      // Check if this is an LLM error with detailed info
+      llmError = vmError.llmErrorInfo
+      pageAltText = `LLM error: ${llmError!.errorMessage}`
+      pageTopic = `Error: ${llmError!.errorType}`
     } else {
       // Try to extract error info from the error message
       const errorMsg = vmError.message || String(vmError)
@@ -892,6 +898,11 @@ You will receive webpage content (which may include HTML). Extract the meaningfu
         // Extract error type from message
         pageAltText = errorMsg.split('\n')[0].replace('Site Analysis Failed: ', '')
         pageTopic = 'Site access error'
+      } else if (errorMsg.includes('LLM Error:') || errorMsg.includes('LLM Connection Failed:')) {
+        // Try to classify LLM error from message
+        llmError = classifyLLMError(vmError, llmBaseUrl || DEFAULT_LLM_URL)
+        pageAltText = `LLM error: ${llmError.errorMessage}`
+        pageTopic = `Error: ${llmError.errorType}`
       } else {
         pageAltText = undefined
         pageTopic = undefined
@@ -1127,6 +1138,7 @@ Please analyze the image and provide a JSON response with:
     imageHeight?: number
     imageSize?: number
     error?: FetchErrorInfo
+    llmError?: LLMErrorInfo
   } = {
     url,
     pageAltText: finalPageAltText,
@@ -1139,6 +1151,9 @@ Please analyze the image and provide a JSON response with:
   }
   if (fetchError) {
     finalResult.error = fetchError
+  }
+  if (llmError) {
+    finalResult.llmError = llmError
   }
   if (imageResult?.imageUrl) {
     finalResult.imageUrl = imageResult.imageUrl
@@ -1175,6 +1190,137 @@ export interface FetchErrorInfo {
   errorCode?: number
   errorMessage: string
   suggestion: string
+}
+
+/**
+ * Error information for LLM connection/response issues
+ */
+export interface LLMErrorInfo {
+  errorType: 'not_running' | 'no_model' | 'connection_refused' | 'timeout' | 'auth_failed' | 'endpoint_not_found' | 'rate_limited' | 'server_error' | 'unknown'
+  errorCode?: number
+  errorMessage: string
+  suggestion: string
+  llmUrl?: string
+}
+
+/**
+ * Classifies LLM errors and returns descriptive error information
+ */
+function classifyLLMError(error: any, llmUrl: string, response?: Response, errorText?: string): LLMErrorInfo {
+  const errorMessage = error?.message || String(error)
+  const errorCode = error?.cause?.code || error?.code
+  const status = response?.status
+  
+  // Check for "No models loaded" error
+  if (errorText?.includes('No models loaded') || errorMessage.includes('No models loaded')) {
+    return {
+      errorType: 'no_model',
+      errorMessage: 'No model loaded in LM Studio',
+      suggestion: 'Open LM Studio, go to the Chat tab, select and load a model, then ensure the Local Server is running (View → Local Server).',
+      llmUrl,
+    }
+  }
+  
+  // HTTP status code errors
+  if (status === 401) {
+    return {
+      errorType: 'auth_failed',
+      errorCode: 401,
+      errorMessage: `Authentication failed for LLM server`,
+      suggestion: `The LLM server at ${llmUrl} requires authentication. Check your API key or authentication settings.`,
+      llmUrl,
+    }
+  }
+  
+  if (status === 404) {
+    return {
+      errorType: 'endpoint_not_found',
+      errorCode: 404,
+      errorMessage: `LLM endpoint not found`,
+      suggestion: `The LLM server at ${llmUrl} does not have the /chat/completions endpoint. Verify the server URL is correct and supports OpenAI-compatible API.`,
+      llmUrl,
+    }
+  }
+  
+  if (status === 429) {
+    return {
+      errorType: 'rate_limited',
+      errorCode: 429,
+      errorMessage: `Rate limit exceeded`,
+      suggestion: 'The LLM server is receiving too many requests. Wait a moment and try again.',
+      llmUrl,
+    }
+  }
+  
+  if (status && status >= 500) {
+    return {
+      errorType: 'server_error',
+      errorCode: status,
+      errorMessage: `LLM server error (${status})`,
+      suggestion: `The LLM server at ${llmUrl} encountered an internal error. Check if the server is running properly and try again later.`,
+      llmUrl,
+    }
+  }
+  
+  // Connection refused
+  if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
+    return {
+      errorType: 'connection_refused',
+      errorMessage: `Cannot connect to LLM server at ${llmUrl}`,
+      suggestion: 'Ensure LM Studio is running and the Local Server is started. Check that the server URL is correct (should be like http://localhost:1234/v1).',
+      llmUrl,
+    }
+  }
+  
+  // DNS resolution failures
+  if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+    return {
+      errorType: 'not_running',
+      errorMessage: `Cannot resolve LLM server hostname`,
+      suggestion: `The hostname in ${llmUrl} cannot be resolved. Check that the server URL is correct and your network connection is working.`,
+      llmUrl,
+    }
+  }
+  
+  // Timeout errors
+  if (errorCode === 'ETIMEDOUT' || errorCode === 'ESOCKETTIMEDOUT' || 
+      errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT') ||
+      error?.name === 'AbortError' || errorMessage.includes('aborted')) {
+    return {
+      errorType: 'timeout',
+      errorMessage: `LLM request timed out`,
+      suggestion: `The LLM server at ${llmUrl} did not respond within the timeout period. The server may be overloaded, slow, or not running.`,
+      llmUrl,
+    }
+  }
+  
+  // Connection reset
+  if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
+    return {
+      errorType: 'connection_refused',
+      errorMessage: `Connection was reset by LLM server`,
+      suggestion: `The connection to ${llmUrl} was unexpectedly closed. The server may have crashed or restarted.`,
+      llmUrl,
+    }
+  }
+  
+  // Generic fetch failures
+  if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
+    return {
+      errorType: 'not_running',
+      errorMessage: `Network request to LLM server failed`,
+      suggestion: `Unable to make a network request to ${llmUrl}. Check that the server is running and accessible.`,
+      llmUrl,
+    }
+  }
+  
+  // Default unknown error
+  return {
+    errorType: 'unknown',
+    errorMessage: errorMessage.substring(0, 200),
+    suggestion: `An unexpected error occurred with the LLM server at ${llmUrl}. Check that the server is running and the URL is correct.`,
+    llmUrl,
+  }
 }
 
 /**
@@ -1467,135 +1613,33 @@ function createCustomCapabilities(llmBaseUrl: string) {
 
         if (!response.ok) {
           const errorText = await response.text()
-          let errorMessage: string
-          
-          // Provide helpful error messages for common issues
-          if (errorText.includes('No models loaded')) {
-            errorMessage = `LLM Error: No model loaded in LM Studio.\n\n` +
-              `To fix this:\n` +
-              `1. Open LM Studio\n` +
-              `2. Go to the "Chat" tab\n` +
-              `3. Select and load a model from the dropdown\n` +
-              `4. Ensure the Local Server is running (View → Local Server)\n` +
-              `5. Try again`
-          } else if (response.status === 401) {
-            errorMessage = `LLM Error: Authentication failed (401 Unauthorized).\n\n` +
-              `The LLM server at ${llmBaseUrl} requires authentication.\n` +
-              `Please check your API key or authentication settings.`
-          } else if (response.status === 404) {
-            errorMessage = `LLM Error: Endpoint not found (404).\n\n` +
-              `The LLM server at ${llmBaseUrl} does not have the /chat/completions endpoint.\n` +
-              `Please verify the server URL is correct and the server supports OpenAI-compatible API.`
-          } else if (response.status === 429) {
-            errorMessage = `LLM Error: Rate limit exceeded (429).\n\n` +
-              `The LLM server is receiving too many requests.\n` +
-              `Please wait a moment and try again.`
-          } else if (response.status >= 500) {
-            errorMessage = `LLM Error: Server error (${response.status}).\n\n` +
-              `The LLM server at ${llmBaseUrl} encountered an internal error.\n` +
-              `Please check if the server is running properly and try again later.`
-          } else {
-            errorMessage = `LLM Error: ${response.status} ${response.statusText}\n\n` +
-              `Server: ${llmBaseUrl}\n` +
-              `Details: ${errorText.substring(0, 200)}`
-          }
-          
-          throw new Error(errorMessage)
+          const errorInfo = classifyLLMError(null, llmBaseUrl, response, errorText)
+          const error = new Error(
+            `LLM Error: ${errorInfo.errorMessage}\n\n` +
+            `Server: ${llmBaseUrl}\n` +
+            `Reason: ${errorInfo.suggestion}`
+          ) as Error & { llmErrorInfo: LLMErrorInfo }
+          error.llmErrorInfo = errorInfo
+          throw error
         }
 
         const data = await response.json() as any
         return data.choices[0]?.message ?? { content: '' }
       } catch (error: any) {
-        // Handle connection errors with helpful messages
-        const errorCode = error.cause?.code || error.code
-        const errorMessage = error.message || String(error)
-        
-        if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
-          throw new Error(
-            `LLM Connection Failed: Cannot connect to LLM server.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `Possible solutions:\n` +
-            `1. Ensure LM Studio is running and the Local Server is started\n` +
-            `2. Check that the server URL is correct (should be like http://localhost:1234/v1)\n` +
-            `3. Verify the server is accessible from this machine\n` +
-            `4. Check your firewall settings\n\n` +
-            `To start LM Studio server:\n` +
-            `- Open LM Studio\n` +
-            `- Load a model in the Chat tab\n` +
-            `- Go to View → Local Server\n` +
-            `- Click "Start Server"`
-          )
-        } else if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
-          throw new Error(
-            `LLM Connection Failed: Cannot resolve server hostname.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The hostname in the URL cannot be resolved.\n` +
-            `Please check:\n` +
-            `1. The server URL is correct\n` +
-            `2. Your network connection is working\n` +
-            `3. DNS resolution is working properly`
-          )
-        } else if (errorCode === 'ETIMEDOUT' || errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT')) {
-          throw new Error(
-            `LLM Connection Failed: Request timed out.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The LLM server did not respond within 60 seconds.\n` +
-            `Possible causes:\n` +
-            `1. The server is overloaded or slow\n` +
-            `2. Network connectivity issues\n` +
-            `3. The server is not running or not accessible\n\n` +
-            `Please check the server status and try again.`
-          )
-        } else if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
-          throw new Error(
-            `LLM Connection Failed: Connection was reset by the server.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The connection was unexpectedly closed by the server.\n` +
-            `This might indicate:\n` +
-            `1. The server crashed or restarted\n` +
-            `2. Network instability\n` +
-            `3. The server rejected the connection\n\n` +
-            `Please check the server status and try again.`
-          )
-        } else if (error.name === 'AbortError' || errorMessage.includes('aborted')) {
-          throw new Error(
-            `LLM Connection Failed: Request was aborted (timeout).\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The request took too long and was cancelled.\n` +
-            `This might indicate:\n` +
-            `1. The server is very slow or unresponsive\n` +
-            `2. The model is taking too long to process\n` +
-            `3. Network issues\n\n` +
-            `Please try again or use a faster model.`
-          )
-        } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
-          throw new Error(
-            `LLM Connection Failed: Network request failed.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `Unable to make a network request to the LLM server.\n` +
-            `Please check:\n` +
-            `1. The server URL is correct\n` +
-            `2. The server is running and accessible\n` +
-            `3. Your network connection is working\n` +
-            `4. CORS settings (if accessing a remote server)`
-          )
-        }
-        
-        // If it's already a formatted error message, re-throw it
-        if (errorMessage.includes('LLM Error:') || errorMessage.includes('LLM Connection Failed:')) {
+        // If we already classified it, re-throw
+        if (error.llmErrorInfo) {
           throw error
         }
         
-        // Otherwise, provide a generic but helpful error
-        throw new Error(
-          `LLM Connection Failed: ${errorMessage}\n\n` +
-          `Server URL: ${llmBaseUrl}\n\n` +
-          `Please check:\n` +
-          `1. The server is running and accessible\n` +
-          `2. The URL is correct\n` +
-          `3. Your network connection is working\n` +
-          `4. The server supports the OpenAI-compatible API format`
-        )
+        // Classify the error
+        const errorInfo = classifyLLMError(error, llmBaseUrl)
+        const enhancedError = new Error(
+          `LLM Error: ${errorInfo.errorMessage}\n\n` +
+          `Server: ${llmBaseUrl}\n\n` +
+          `Reason: ${errorInfo.suggestion}`
+        ) as Error & { llmErrorInfo: LLMErrorInfo }
+        enhancedError.llmErrorInfo = errorInfo
+        throw enhancedError
       }
     },
     async predictWithVision(system: string, userText: string, imageDataUri: string, responseFormat?: any) {
@@ -1643,135 +1687,33 @@ function createCustomCapabilities(llmBaseUrl: string) {
 
         if (!response.ok) {
           const errorText = await response.text()
-          let errorMessage: string
-          
-          // Provide helpful error messages for common issues
-          if (errorText.includes('No models loaded')) {
-            errorMessage = `LLM Vision Error: No model loaded in LM Studio.\n\n` +
-              `To fix this:\n` +
-              `1. Open LM Studio\n` +
-              `2. Go to the "Chat" tab\n` +
-              `3. Select and load a model from the dropdown\n` +
-              `4. Ensure the Local Server is running (View → Local Server)\n` +
-              `5. Try again`
-          } else if (response.status === 401) {
-            errorMessage = `LLM Vision Error: Authentication failed (401 Unauthorized).\n\n` +
-              `The LLM server at ${llmBaseUrl} requires authentication.\n` +
-              `Please check your API key or authentication settings.`
-          } else if (response.status === 404) {
-            errorMessage = `LLM Vision Error: Endpoint not found (404).\n\n` +
-              `The LLM server at ${llmBaseUrl} does not have the /chat/completions endpoint.\n` +
-              `Please verify the server URL is correct and the server supports OpenAI-compatible vision API.`
-          } else if (response.status === 429) {
-            errorMessage = `LLM Vision Error: Rate limit exceeded (429).\n\n` +
-              `The LLM server is receiving too many requests.\n` +
-              `Please wait a moment and try again.`
-          } else if (response.status >= 500) {
-            errorMessage = `LLM Vision Error: Server error (${response.status}).\n\n` +
-              `The LLM server at ${llmBaseUrl} encountered an internal error.\n` +
-              `Please check if the server is running properly and try again later.`
-          } else {
-            errorMessage = `LLM Vision Error: ${response.status} ${response.statusText}\n\n` +
-              `Server: ${llmBaseUrl}\n` +
-              `Details: ${errorText.substring(0, 200)}`
-          }
-          
-          throw new Error(errorMessage)
+          const errorInfo = classifyLLMError(null, llmBaseUrl, response, errorText)
+          const error = new Error(
+            `LLM Vision Error: ${errorInfo.errorMessage}\n\n` +
+            `Server: ${llmBaseUrl}\n` +
+            `Reason: ${errorInfo.suggestion}`
+          ) as Error & { llmErrorInfo: LLMErrorInfo }
+          error.llmErrorInfo = errorInfo
+          throw error
         }
 
         const data = await response.json() as any
         return data.choices[0]?.message ?? { content: '' }
       } catch (error: any) {
-        // Handle connection errors with helpful messages (same as predict)
-        const errorCode = error.cause?.code || error.code
-        const errorMessage = error.message || String(error)
-        
-        if (errorCode === 'ECONNREFUSED' || errorMessage.includes('ECONNREFUSED')) {
-          throw new Error(
-            `LLM Vision Connection Failed: Cannot connect to LLM server.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `Possible solutions:\n` +
-            `1. Ensure LM Studio is running and the Local Server is started\n` +
-            `2. Check that the server URL is correct (should be like http://localhost:1234/v1)\n` +
-            `3. Verify the server is accessible from this machine\n` +
-            `4. Check your firewall settings\n\n` +
-            `To start LM Studio server:\n` +
-            `- Open LM Studio\n` +
-            `- Load a model in the Chat tab\n` +
-            `- Go to View → Local Server\n` +
-            `- Click "Start Server"`
-          )
-        } else if (errorCode === 'ENOTFOUND' || errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
-          throw new Error(
-            `LLM Vision Connection Failed: Cannot resolve server hostname.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The hostname in the URL cannot be resolved.\n` +
-            `Please check:\n` +
-            `1. The server URL is correct\n` +
-            `2. Your network connection is working\n` +
-            `3. DNS resolution is working properly`
-          )
-        } else if (errorCode === 'ETIMEDOUT' || errorMessage.includes('timeout') || errorMessage.includes('TIMEDOUT')) {
-          throw new Error(
-            `LLM Vision Connection Failed: Request timed out.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The LLM server did not respond within 120 seconds.\n` +
-            `Vision requests can take longer - this might indicate:\n` +
-            `1. The server is overloaded or slow\n` +
-            `2. Network connectivity issues\n` +
-            `3. The server is not running or not accessible\n\n` +
-            `Please check the server status and try again.`
-          )
-        } else if (errorCode === 'ECONNRESET' || errorMessage.includes('ECONNRESET')) {
-          throw new Error(
-            `LLM Vision Connection Failed: Connection was reset by the server.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The connection was unexpectedly closed by the server.\n` +
-            `This might indicate:\n` +
-            `1. The server crashed or restarted\n` +
-            `2. Network instability\n` +
-            `3. The server rejected the connection\n\n` +
-            `Please check the server status and try again.`
-          )
-        } else if (error.name === 'AbortError' || errorMessage.includes('aborted')) {
-          throw new Error(
-            `LLM Vision Connection Failed: Request was aborted (timeout).\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `The request took too long and was cancelled.\n` +
-            `Vision requests can take longer - this might indicate:\n` +
-            `1. The server is very slow or unresponsive\n` +
-            `2. The model is taking too long to process the image\n` +
-            `3. Network issues\n\n` +
-            `Please try again or use a faster model.`
-          )
-        } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
-          throw new Error(
-            `LLM Vision Connection Failed: Network request failed.\n\n` +
-            `Server URL: ${llmBaseUrl}\n\n` +
-            `Unable to make a network request to the LLM server.\n` +
-            `Please check:\n` +
-            `1. The server URL is correct\n` +
-            `2. The server is running and accessible\n` +
-            `3. Your network connection is working\n` +
-            `4. CORS settings (if accessing a remote server)`
-          )
-        }
-        
-        // If it's already a formatted error message, re-throw it
-        if (errorMessage.includes('LLM Vision Error:') || errorMessage.includes('LLM Vision Connection Failed:')) {
+        // If we already classified it, re-throw
+        if (error.llmErrorInfo) {
           throw error
         }
         
-        // Otherwise, provide a generic but helpful error
-        throw new Error(
-          `LLM Vision Connection Failed: ${errorMessage}\n\n` +
-          `Server URL: ${llmBaseUrl}\n\n` +
-          `Please check:\n` +
-          `1. The server is running and accessible\n` +
-          `2. The URL is correct\n` +
-          `3. Your network connection is working\n` +
-          `4. The server supports the OpenAI-compatible vision API format`
-        )
+        // Classify the error
+        const errorInfo = classifyLLMError(error, llmBaseUrl)
+        const enhancedError = new Error(
+          `LLM Vision Error: ${errorInfo.errorMessage}\n\n` +
+          `Server: ${llmBaseUrl}\n\n` +
+          `Reason: ${errorInfo.suggestion}`
+        ) as Error & { llmErrorInfo: LLMErrorInfo }
+        enhancedError.llmErrorInfo = errorInfo
+        throw enhancedError
       }
     },
     async embed(text: string) {

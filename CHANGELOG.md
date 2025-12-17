@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Complete Refactoring to Idiomatic Agent-99 Patterns
 
+### Added (2025-12-17) - Better Errors for LLM Connection Issues
+- **Descriptive LLM error messages** when LM Studio isn't responding, with specific error types:
+  - `not_running` - LLM server not running or hostname can't be resolved
+  - `no_model` - No model loaded in LM Studio
+  - `connection_refused` - Server not accepting connections
+  - `timeout` - Request timed out
+  - `auth_failed` - Authentication required (HTTP 401)
+  - `endpoint_not_found` - Endpoint not found (HTTP 404)
+  - `rate_limited` - Rate limit exceeded (HTTP 429)
+  - `server_error` - Server errors (HTTP 5xx)
+- **LLMErrorInfo interface** exported from index.ts with:
+  - `errorType`: Categorized error type
+  - `errorCode`: HTTP status code (when applicable)
+  - `errorMessage`: Human-readable description
+  - `suggestion`: Actionable advice for the user
+  - `llmUrl`: The LLM server URL that failed
+- **Enhanced LLM error classification** (`classifyLLMError()`) that:
+  - Detects "No models loaded" errors from LM Studio
+  - Classifies HTTP errors (401, 404, 429, 5xx)
+  - Detects network errors (ENOTFOUND, ECONNREFUSED, ETIMEDOUT, etc.)
+  - Provides specific suggestions for each error type
+- **Web UI LLM error display** with:
+  - Yellow warning styling for items with LLM errors
+  - Error type badge prefixed with "LLM:" (e.g., "LLM: NOT RUNNING")
+  - HTTP status code display (when applicable)
+  - Descriptive message explaining why the LLM couldn't be reached
+  - Suggestion text to help users fix the issue
+  - LLM server URL display
+- **Examples of improved LLM error messages**:
+  - Server not running → "Cannot connect to LLM server" + "Ensure LM Studio is running and the Local Server is started"
+  - No model loaded → "No model loaded in LM Studio" + step-by-step instructions to fix
+
 ### Added (2025-12-17) - Better Errors for Sites That Block
 - **Descriptive error messages** for sites that can't be analyzed, with specific error types:
   - `blocked` - Site blocks automated access (HTTP 401, 403, 429, 451)
