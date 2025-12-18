@@ -1,9 +1,7 @@
 import {
   AgentVM,
   batteries,
-  storeVectorize,
-  storeSearch,
-  llmPredictBattery,
+  batteryAtoms,
   A99,
   defineAtom,
 } from 'agent-99'
@@ -2390,21 +2388,26 @@ Return JSON with "score" field (0-100).`
 
 /**
  * Creates a VM instance configured with battery capabilities for local development
+ *
+ * Uses batteryAtoms (agent-99 0.0.3+) which consolidates storeVectorize, storeSearch,
+ * and llmPredictBattery into a single import. Custom atoms can override battery defaults.
  */
 function createVM() {
   return new AgentVM({
-    storeVectorize,
-    storeSearch,
-    llmPredictBattery: llmPredictBatteryLongTimeout, // Use custom atom with longer timeout
-    llmVisionBattery, // Register vision atom for image processing
-    extractResponseText, // Register response text extraction atom
-    htmlExtractText, // Register HTML text extraction atom
-    buildUserPrompt, // Register user prompt builder atom
-    extractImagesFromHTML: extractImagesFromHTMLAtom, // Register image extraction atom
-    filterCandidateImages: filterCandidateImagesAtom, // Register image filtering atom
-    fetchImageData: fetchImageDataAtom, // Register image fetching atom
-    scoreImageInterestingness: scoreImageInterestingnessAtom, // Register image scoring atom
-    processCandidateImages: processCandidateImagesAtom, // Register parallel image processing atom
+    // Include all standard battery atoms (storeVectorize, storeSearch, llmPredictBattery, etc.)
+    ...batteryAtoms,
+    // Override llmPredictBattery with custom long timeout version
+    llmPredictBattery: llmPredictBatteryLongTimeout,
+    // Custom atoms for this application
+    llmVisionBattery,
+    extractResponseText,
+    htmlExtractText,
+    buildUserPrompt,
+    extractImagesFromHTML: extractImagesFromHTMLAtom,
+    filterCandidateImages: filterCandidateImagesAtom,
+    fetchImageData: fetchImageDataAtom,
+    scoreImageInterestingness: scoreImageInterestingnessAtom,
+    processCandidateImages: processCandidateImagesAtom,
   })
 }
 
