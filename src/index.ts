@@ -47,28 +47,19 @@ interface ImageInfo {
 
 /**
  * Reusable schema for ImageInfo objects
- * 
- * Note: tosijs-schema doesn't support optional/nullable types directly,
- * so we use s.any for fields that may be undefined. The TypeScript interface
- * above provides compile-time type safety, while this schema provides
- * runtime structure validation.
- * 
- * Expected types for s.any fields:
- * - width: number | undefined
- * - height: number | undefined  
- * - alt: string | undefined
- * - area: number | undefined (computed: width * height)
- * - size: number | undefined (file size in bytes)
- * - source: string | undefined ('img' | 'picture' | 'css-background' | 'data-bg')
+ *
+ * Uses tosijs-schema's .optional property for proper type safety.
+ * This generates correct JSON Schema with optional fields excluded
+ * from the "required" array, while maintaining TypeScript type inference.
  */
 const imageInfoSchema = s.object({
   url: s.string,
-  width: s.any,  // number | undefined
-  height: s.any, // number | undefined
-  alt: s.any,    // string | undefined
-  area: s.any,   // number | undefined
-  size: s.any,   // number | undefined
-  source: s.any, // string | undefined
+  width: s.number.optional,
+  height: s.number.optional,
+  alt: s.string.optional,
+  area: s.number.optional,
+  size: s.number.optional,
+  source: s.string.optional,
 })
 
 /**
@@ -87,6 +78,15 @@ const scoredCandidateSchema = s.object({
   imageData: imageDataSchema,
   score: s.number,
 })
+
+/**
+ * Schema for page context used in image scoring
+ * Contains the page's alt-text summary and topic for contextual relevance scoring
+ */
+const pageContextSchema = s.object({
+  altText: s.string,
+  topic: s.string,
+}).optional
 
 /**
  * Extracts text content from HTML string
@@ -654,10 +654,10 @@ Please analyze the image and provide a JSON response with:
     .return(
       s.object({
         altText: s.string,
-        description: s.any, // Optional field - can be string or undefined
+        description: s.string.optional,
       })
     )
-  
+
   // Compile to AST
   const altTextAst = altTextLogic.toJSON()
   
@@ -1051,7 +1051,7 @@ Please analyze the image and provide a JSON response with:
               .return(
                 s.object({
                   altText: s.string,
-                  description: s.any,
+                  description: s.string.optional,
                 })
               )
             
@@ -1971,9 +1971,9 @@ const extractImagesFromHTMLAtom = defineAtom(
  */
 const filterCandidateImagesAtom = defineAtom(
   'filterCandidateImages',
-  s.object({ 
+  s.object({
     images: s.array(imageInfoSchema),
-    maxCandidates: s.any  // number | undefined - controls max images to return
+    maxCandidates: s.number.optional,
   }),
   s.array(imageInfoSchema),
   async ({ images, maxCandidates = 3 }: { images: ImageInfo[]; maxCandidates?: number }, ctx: any) => {
@@ -2145,8 +2145,8 @@ const fetchImageDataAtom = defineAtom(
   s.object({
     size: s.number,
     base64: s.string,
-    width: s.any,   // number | undefined - image width if detected
-    height: s.any,  // number | undefined - image height if detected
+    width: s.number.optional,
+    height: s.number.optional,
   }),
   async ({ imageUrl }: { imageUrl: string }, ctx: any) => {
     // Use fetch capability (which should be provided via httpFetch atom in pipeline)
@@ -2184,7 +2184,7 @@ const processCandidateImagesAtom = defineAtom(
   'processCandidateImages',
   s.object({
     candidates: s.array(imageInfoSchema),
-    pageContext: s.any,  // { altText: string, topic: string } | undefined - page context for scoring
+    pageContext: pageContextSchema,
   }),
   s.array(scoredCandidateSchema),
   async ({ candidates, pageContext }: any, ctx: any) => {
@@ -2300,7 +2300,7 @@ const scoreImageInterestingnessAtom = defineAtom(
   s.object({
     imageDataUri: s.string,
     imageInfo: imageInfoSchema,
-    pageContext: s.any,  // { altText: string, topic: string } | undefined - page context for scoring
+    pageContext: pageContextSchema,
   }),
   s.number,
   async ({ imageDataUri, imageInfo, pageContext }: any, ctx: any) => {
@@ -2458,10 +2458,10 @@ export async function testVisionAtom(imageDataUri: string, llmBaseUrl?: string) 
     .return(
       s.object({
         altText: s.string,
-        description: s.any, // Optional field - can be string or undefined
+        description: s.string.optional,
       })
     )
-  
+
   // Compile to AST
   const ast = logic.toJSON()
   
