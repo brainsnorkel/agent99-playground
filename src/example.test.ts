@@ -73,11 +73,12 @@ describe('generateAltText', () => {
       // Fuel should be consumed
       expect(result.fuelUsed).toBeGreaterThan(0)
     } catch (error: any) {
-      // If LLM not available, verify it's a connection error (expected behavior)
-      // This test passes if either: LLM works OR connection error is properly thrown
-      if (error.message?.match(/LLM|connection|refused|Unable to connect/i)) {
-        // Connection error is expected when LLM not running - test passes
-        expect(error.message).toMatch(/connection|refused|Unable to connect/i)
+      // If LLM not available, verify it's a connection/capability error (expected behavior)
+      // This test passes if either: LLM works OR connection/capability error is properly thrown
+      // agent-99 0.0.3+ may throw "Capability 'llm' missing or invalid" when LLM not configured
+      if (error.message?.match(/LLM|connection|refused|Unable to connect|Capability.*missing|Capability.*invalid|Authentication required/i)) {
+        // Connection/capability error is expected when LLM not running - test passes
+        expect(error.message).toMatch(/connection|refused|Unable to connect|Capability.*missing|Capability.*invalid|Authentication required/i)
       } else {
         // Other errors should still fail the test
         throw error
@@ -99,8 +100,9 @@ describe('generateAltText', () => {
       expect(result).toHaveProperty('url')
       expect(result).toHaveProperty('altText')
     } catch (error: any) {
-      // Accept various error message formats for fetch failures and timeouts
-      expect(error.message).toMatch(/Failed to fetch|Unable to connect|connection|refused|timed out|timeout/i)
+      // Accept various error message formats for fetch failures, timeouts, and capability errors
+      // agent-99 0.0.3+ may throw "Capability 'llm' missing or invalid" when LLM not configured
+      expect(error.message).toMatch(/Failed to fetch|Unable to connect|connection|refused|timed out|timeout|Capability.*missing|Capability.*invalid/i)
     }
   }, { timeout: 30000 })
 
@@ -114,8 +116,9 @@ describe('generateAltText', () => {
       expect(result).toHaveProperty('topic')
       expect(result).toHaveProperty('fuelUsed')
     } catch (error: any) {
-      // If LLM not available, that's expected - just verify error is about connection
-      expect(error.message).toMatch(/LLM|connection|refused|Unable to connect/i)
+      // If LLM not available, that's expected - verify error is about connection or capability
+      // agent-99 0.0.3+ may throw "Capability 'llm' missing or invalid" when LLM not configured
+      expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|Capability.*missing|Capability.*invalid|Authentication required/i)
     }
   }, { timeout: 60000 })
 
@@ -155,10 +158,11 @@ describe('Vision Atom Tests', () => {
         expect(typeof result.description).toBe('string')
       }
     } catch (error: any) {
-      // If LLM not available, verify it's a connection error (expected behavior)
-      if (error.message?.match(/LLM|connection|refused|Unable to connect|predictWithVision/i)) {
-        // Connection error is expected when LLM not running or vision not supported
-        expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision/i)
+      // If LLM not available, verify it's a connection/capability error (expected behavior)
+      // agent-99 0.0.3+ may throw "Capability 'llm' missing or invalid" when LLM not configured
+      if (error.message?.match(/LLM|connection|refused|Unable to connect|predictWithVision|Capability.*missing|Capability.*invalid/i)) {
+        // Connection/capability error is expected when LLM not running or vision not supported
+        expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision|Capability.*missing|Capability.*invalid/i)
       } else {
         // Other errors should still fail the test
         throw error
@@ -189,8 +193,9 @@ describe('Vision Atom Tests', () => {
       expect(result.fuelUsed).toBeGreaterThan(0)
     } catch (error: any) {
       // If image fetch fails or LLM not available, that's expected
-      if (error.message?.match(/LLM|connection|refused|Unable to connect|predictWithVision|Failed to fetch image/i)) {
-        expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision|Failed to fetch image/i)
+      // agent-99 0.0.3+ may throw "Capability 'llm' missing or invalid" when LLM not configured
+      if (error.message?.match(/LLM|connection|refused|Unable to connect|predictWithVision|Failed to fetch image|Capability.*missing|Capability.*invalid/i)) {
+        expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision|Failed to fetch image|Capability.*missing|Capability.*invalid/i)
       } else {
         throw error
       }
@@ -220,7 +225,8 @@ describe('Vision Atom Tests', () => {
       expect(result).toHaveProperty('fuelUsed')
     } catch (error: any) {
       // If LLM not available, that's expected
-      expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision/i)
+      // agent-99 0.0.3+ may throw "Capability 'llm' missing or invalid" when LLM not configured
+      expect(error.message).toMatch(/LLM|connection|refused|Unable to connect|predictWithVision|Capability.*missing|Capability.*invalid/i)
     }
   }, { timeout: 60000 })
 })

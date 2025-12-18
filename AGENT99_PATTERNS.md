@@ -215,12 +215,16 @@ const myCustomAtom = defineAtom(
 ### Registering Atoms
 
 ```typescript
+import { AgentVM, batteryAtoms } from 'agent-99'
+
+// agent-99 0.0.3+: Use batteryAtoms spread to include all standard batteries
 function createVM() {
   return new AgentVM({
+    ...batteryAtoms,           // Include storeVectorize, storeSearch, llmPredictBattery, etc.
     myCustomAtom,              // Register custom atom
     htmlExtractText,           // Register other atoms
     extractImagesFromHTML,
-    // ... more atoms
+    // ... more atoms (can override battery atoms if needed)
   })
 }
 ```

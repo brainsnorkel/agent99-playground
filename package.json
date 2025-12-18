@@ -20,7 +20,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "agent-99": "^0.0.1",
+    "agent-99": "^0.0.3",
     "tosijs-schema": "^1.0.1"
   },
   "devDependencies": {

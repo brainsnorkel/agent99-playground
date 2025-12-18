@@ -168,11 +168,12 @@ const extractImagesFromHTMLAtom = defineAtom(
   { docs: 'Extract image information from HTML', cost: 5 }
 )
 
-// Register in VM
+// Register in VM (agent-99 0.0.3+: use batteryAtoms spread)
 function createVM() {
   return new AgentVM({
+    ...batteryAtoms,  // Include all standard battery atoms
     extractImagesFromHTML: extractImagesFromHTMLAtom,
-    // ... other atoms
+    // ... other custom atoms
   })
 }
 
