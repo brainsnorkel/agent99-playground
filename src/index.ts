@@ -1556,7 +1556,7 @@ function createCustomCapabilities(llmBaseUrl: string) {
   // Add fetch wrapper with descriptive error messages
   customCaps.fetch = createFetchWithErrorInfo()
   
-  // Helper to get available model from LM Studio
+  // Helper to get available LLM model from LM Studio (filters out embedding models)
   async function getAvailableModel(): Promise<string | null> {
     try {
       const modelsResponse = await fetch(`${llmBaseUrl}/models`)
@@ -1564,6 +1564,33 @@ function createCustomCapabilities(llmBaseUrl: string) {
         const modelsData = await modelsResponse.json() as any
         const models = modelsData.data || modelsData
         if (Array.isArray(models) && models.length > 0) {
+          // Filter to only LLM models (exclude embedding models)
+          // Embedding models typically have "embed" in their name/id or have object type "model" but are embeddings
+          const llmModels = models.filter((model: any) => {
+            const modelId = (model.id || model.name || '').toLowerCase()
+            const modelObject = model.object || ''
+            
+            // Exclude embedding models
+            if (modelId.includes('embed') || modelId.includes('embedding')) {
+              return false
+            }
+            
+            // Exclude if explicitly marked as embedding
+            if (modelObject === 'embedding' || model.owned_by?.toLowerCase()?.includes('embed')) {
+              return false
+            }
+            
+            // Include LLM models (chat models, completion models, etc.)
+            return true
+          })
+          
+          // Return the first LLM model found
+          if (llmModels.length > 0) {
+            return llmModels[0].id || llmModels[0].name || null
+          }
+          
+          // Fallback: if no LLM models found but we have models, return first one
+          // (LM Studio will handle the error if it's not an LLM)
           return models[0].id || models[0].name || null
         }
       }
@@ -1622,6 +1649,11 @@ function createCustomCapabilities(llmBaseUrl: string) {
         }
 
         const data = await response.json() as any
+        
+        // Note: Some LLM servers (e.g., deepseek models) may log "Channel Error" messages
+        // to stderr even when requests succeed. These can be safely ignored if the response
+        // is successful (status 200) and contains valid data.
+        
         return data.choices[0]?.message ?? { content: '' }
       } catch (error: any) {
         // If we already classified it, re-throw
@@ -1642,6 +1674,42 @@ function createCustomCapabilities(llmBaseUrl: string) {
     },
     async predictWithVision(system: string, userText: string, imageDataUri: string, responseFormat?: any) {
       try {
+        // Normalize image data URI for LM Studio compatibility
+        // LM Studio may require the full data URI format: data:image/type;base64,<base64>
+        let normalizedImageUri = imageDataUri
+        
+        // Debug: Log what we received (first 100 chars to avoid huge logs)
+        debugLog('predictWithVision: Received imageDataUri type:', typeof imageDataUri, 'length:', imageDataUri?.length, 'preview:', imageDataUri?.substring(0, 100))
+        
+        // If it's already a data URI, validate it
+        if (imageDataUri.startsWith('data:')) {
+          // Ensure it has the correct format: data:image/type;base64,<base64>
+          if (!imageDataUri.includes(';base64,')) {
+            debugWarn('predictWithVision: Invalid data URI format - missing ;base64, separator')
+            throw new Error(`Invalid data URI format: missing ';base64,' separator`)
+          }
+          const base64Part = imageDataUri.split(';base64,')[1]
+          if (!base64Part || base64Part.length === 0) {
+            debugWarn('predictWithVision: Invalid data URI format - missing base64 data')
+            throw new Error(`Invalid data URI format: missing base64 data`)
+          }
+          // Validate base64 characters (basic check)
+          if (!/^[A-Za-z0-9+/=]*$/.test(base64Part)) {
+            debugWarn('predictWithVision: Invalid data URI format - invalid base64 characters')
+            throw new Error(`Invalid data URI format: base64 data contains invalid characters`)
+          }
+          debugLog('predictWithVision: Valid data URI detected, base64 length:', base64Part.length)
+        } else if (imageDataUri.startsWith('http://') || imageDataUri.startsWith('https://')) {
+          // If it's a URL, that's an error - we need base64 data
+          debugWarn('predictWithVision: ERROR - Received URL instead of data URI:', imageDataUri.substring(0, 100))
+          throw new Error(`Image data URI cannot be a URL. Expected base64 data URI, got: ${imageDataUri.substring(0, 50)}...`)
+        } else {
+          // If it's just base64 without data: prefix, add it
+          // Assume JPEG if no content type specified
+          debugLog('predictWithVision: Adding data: prefix to base64 string')
+          normalizedImageUri = `data:image/jpeg;base64,${imageDataUri}`
+        }
+        
         // Format messages for vision API (OpenAI-compatible format)
         const messages = [
           { role: 'system', content: system },
@@ -1652,7 +1720,7 @@ function createCustomCapabilities(llmBaseUrl: string) {
               {
                 type: 'image_url',
                 image_url: {
-                  url: imageDataUri, // data URI with base64 image
+                  url: normalizedImageUri, // data URI with base64 image
                 },
               },
             ],
@@ -1696,6 +1764,11 @@ function createCustomCapabilities(llmBaseUrl: string) {
         }
 
         const data = await response.json() as any
+        
+        // Note: Some LLM servers (e.g., deepseek models) may log "Channel Error" messages
+        // to stderr even when requests succeed. These can be safely ignored if the response
+        // is successful (status 200) and contains valid data.
+        
         return data.choices[0]?.message ?? { content: '' }
       } catch (error: any) {
         // If we already classified it, re-throw
